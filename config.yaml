@@ -1,0 +1,42 @@
+# Global Configuration
+root_dir: "C:\\AndroidDL\\downloads"
+dest_dir: "Z:\\Telecharge"
+csv_1_path: "Z:\\Script\\AllInOne\\V4\\exception.txt"
+csv_2_path: "Z:\\Script\\AllInOne\\V4\\batchexception.txt"
+log_path: "C:\\AndroidDL\\workflow.log"
+
+# Timing & Ports
+sleep_time: 1
+im_timeout: 20
+web_port: 5000
+thumb_size: "100px"
+
+# Workflow Steps Activation
+steps_active:
+  step_1: true  # Integrity Check (ImageMagick)
+  step_2: true  # Manual Sort via Web Interface
+  step_3: true  # Cleanup via Regex (Files)
+  step_4: true  # Delete Empty Folders
+  step_5: true  # Rename Leaf Folders (Regex)
+  step_6: true  # Compress Leaf Folders to CBZ (7-Zip)
+  step_7: true  # Rename/Suffix Parent2 via CSV
+  step_8: true  # Move to destination & Final Cleanup
+
+# Regex configurations
+delete_regex:
+  - '^\.nomedia$'
+
+# Rename Leaf Folders (First match applies)
+rename_regex:
+  - pattern: '^(?:.*_)?(?:Chapter|Ch\.)\s*(\d+(?:\.\d+)?)\s+-\s+Episode\s+\d+(?:\.\d+)?(.*)'
+    replacement: 'Ch.\1\2'
+  - pattern: '^(?:.*_)?Chapter\s+(\d+(?:\.\d+)?)(.*)'
+    replacement: 'Ch.\1\2'
+  - pattern: '^.*_((?:Vol\.\d+\s+)?Ch\.\d+.*)'
+    replacement: '\1'
+  - pattern: '^.*_Volume\s+\d+\s+Chapter\s+(\d+(?:\.\d+)?)\s+_\s+(.*)'
+    replacement: 'Ch.\1 - \2'
+  - pattern: '^Episode\s+\d+\s+\((ch\.\s+\d+)\)(.*)'
+    replacement: '\1\2'
+  - pattern: '^\((S\d+)\)\s+Ep\.\s+\d+\s+(.*?)\s*\((ch\.\s+\d+)\)(.*)'
+    replacement: '(\1) \3 \2\4'
