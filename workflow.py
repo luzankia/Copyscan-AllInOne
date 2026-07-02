@@ -41,21 +41,20 @@ def handle_step_error(errors, step_name, allow_rescan=False) -> str:
         if choice == "1": return "next"
         if choice == "2": return "quit"
 
-IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.tiff', '.tif', '.avif'}
-
 def step_1_integrity(config):
     root_dir = Path(config['root_dir'])
     timeout = config['im_timeout']
-    
+    exts = set(config['supported_extensions'])
+
     while True:
         errors = []
         files_to_check = []
         for leaf in get_leaf_dirs(root_dir):
             files_to_check.extend([
                 f for f in leaf.iterdir()
-                if f.is_file() and f.suffix.lower() in IMAGE_EXTENSIONS
+                if f.is_file() and f.suffix.lower() in exts
             ])
-            
+
         if not files_to_check:
             console.print("[blue]Step 1: No image files found to check.[/blue]")
             return "next"
@@ -99,23 +98,25 @@ def step_1_integrity(config):
 def step_2_web_ui(config):
     root_dir = Path(config['root_dir'])
     port = config['web_port']
-    
+    exts = set(config['supported_extensions'])
+
     first_images = []
     for leaf in get_leaf_dirs(root_dir):
         files = sorted([
             f for f in leaf.iterdir() 
-            if f.is_file() and f.suffix.lower() in IMAGE_EXTENSIONS
+            if f.is_file() and f.suffix.lower() in exts
         ], key=lambda x: x.name)
-        
+
         if files:
             first_images.append(files[0])
-            
+
     if not first_images:
         console.print("[blue]Step 2: No images found for Web UI.[/blue]")
         return "next"
-        
-    console.print(f"[cyan]Step 2: Starting Web Server on http://127.0.0.1:{port}[/cyan]")
-    server_thread, completion_event = start_web_ui(first_images, port, config['thumb_size'])
+
+    console.print(f"[cyan]Step 2: Starting Web Server[/cyan]")
+
+    server_thread, completion_event = start_web_ui(first_images, port, config['thumb_size'], exts)
     
     url = f"http://127.0.0.1:{port}"
     webbrowser.open(url)

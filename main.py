@@ -34,14 +34,13 @@ def parse_cli_args(config):
     return config
 
 def execute_workflow(config):
-    # Ajoutez la nouvelle clé 'step_5_1' dans le mapping
     steps_map = {
         'step_1': workflow.step_1_integrity,
         'step_2': workflow.step_2_web_ui,
         'step_3': workflow.step_3_regex_clean,
         'step_4': workflow.step_4_delete_empty,
         'step_5': workflow.step_5_rename_leaf,
-        'step_5_1': workflow.step_5_1_clean_hash_suffix, # <-- Ajout ici
+        'step_5_1': workflow.step_5_1_clean_hash_suffix,
         'step_6': workflow.step_6_compress,
         'step_7': workflow.step_7_csv_rename,
         'step_8': workflow.step_8_final_move
@@ -98,6 +97,6 @@ if __name__ == "__main__":
 
     # 6. PAUSE FINALE (Ajout ici)
     console.print("\n[bold magenta]===================================================[/bold magenta]")
-    console.print("[bold green]✓ Le workflow est terminé avec succès ![/bold green]")
-    console.print("[dim]Appuyez sur ENTRÉE pour fermer cette fenêtre...[/dim]")
+    console.print("[bold green]✓ The workflow has been completed successfully![/bold green]")
+    console.print("[dim]Press ENTER to close this window...[/dim]")
     input()

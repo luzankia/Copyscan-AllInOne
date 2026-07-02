@@ -1,15 +1,25 @@
 # Global Configuration
 root_dir: "C:\\AndroidDL\\downloads"
 dest_dir: "Z:\\Telecharge"
-csv_1_path: "Z:\\Script\\AllInOne\\V4\\exception.txt"
-csv_2_path: "Z:\\Script\\AllInOne\\V4\\batchexception.txt"
+csv_1_path: "Z:\\Script\\AllInOne\\exception.txt"
+csv_2_path: "Z:\\Script\\AllInOne\\batchexception.txt"
 log_path: "C:\\AndroidDL\\workflow.log"
+
+# Supported extension in the workflow
+supported_extensions:
+  - ".jpg"
+  - ".jpeg"
+  - ".png"
+  - ".webp"
+  - ".avif"
+  - ".bmp"
+  - ".gif"
 
 # Timing & Ports
 sleep_time: 1
 im_timeout: 20
-web_port: 5000
-thumb_size: "100px"
+web_port: 5002
+thumb_size: "220px"
 
 # Workflow Steps Activation
 steps_active:
@@ -39,4 +49,8 @@ rename_regex:
   - pattern: '^Episode\s+\d+\s+\((ch\.\s+\d+)\)(.*)'
     replacement: '\1\2'
   - pattern: '^\((S\d+)\)\s+Ep\.\s+\d+\s+(.*?)\s*\((ch\.\s+\d+)\)(.*)'
-    replacement: '(\1) \3 \2\4'
+    replacement: '\1 \3 \2\4'
+  - pattern: '^Ep\.\d+\s+\((ch\.\s+\d+)\)(.*)'
+    replacement: '\1\2'
+  - pattern: '^Ep\.\s*\d+\s+-\s+(.*?)\s*\((ch\.\s*\d+)\)(.*)'
+    replacement: '\2 - \1\3'
