@@ -6,7 +6,6 @@ from pathlib import Path
 from flask import Flask, render_template_string, request, jsonify, send_file
 from werkzeug.serving import make_server
 from PIL import Image
-from utils import console
 
 class ServerThread(threading.Thread):
     def __init__(self, app, port):
@@ -23,7 +22,7 @@ class ServerThread(threading.Thread):
 
 
 def start_web_ui(images_list, port, thumb_size, supported_extensions):
-    """Starts the Flask server for manual sorting and per-folder advanced editing."""
+    """Starts the Flask server for manual sorting, merging, and image splitting."""
     app = Flask(__name__)
     completion_event = threading.Event()
     
@@ -48,13 +47,7 @@ def start_web_ui(images_list, port, thumb_size, supported_extensions):
             'site': site_dir.name if site_dir else "Unknown"
         })
 
-    # --- MERGE HELPERS ---
-    def get_number(filename):
-        match = re.search(r"\d+", filename)
-        if match:
-            return int(match.group())
-        raise ValueError("No number found in filename")
-
+    # --- HELPERS ---
     def merge_images_func(top_path, bottom_path, output_path):
         with Image.open(top_path) as top_img, Image.open(bottom_path) as bottom_img:
             width = max(top_img.width, bottom_img.width)
@@ -63,6 +56,29 @@ def start_web_ui(images_list, port, thumb_size, supported_extensions):
             merged.paste(top_img, (0, 0))
             merged.paste(bottom_img, (0, top_img.height))
             merged.save(output_path)
+
+    def get_natural_key(path):
+        """Allows natural sorting of files (e.g., 2.jpg comes before 10.jpg)."""
+        return [int(text) if text.isdigit() else text.lower() for text in re.split(r'(\d+)', path.name)]
+
+    def resequence_folder(leaf_dir, exts):
+        """Renames all valid files in a folder sequentially (001.ext, 002.ext...) to preserve order."""
+        files = sorted([
+            f for f in leaf_dir.iterdir() 
+            if f.is_file() and f.suffix.lower() in exts and not f.name.startswith("fus-")
+        ], key=get_natural_key)
+        
+        # Step 1: Temporary rename to prevent overwriting conflicts
+        temp_files = []
+        for i, f in enumerate(files):
+            tmp_path = f.with_name(f"__temp_seq_{i}{f.suffix}")
+            f.rename(tmp_path)
+            temp_files.append(tmp_path)
+            
+        # Step 2: Final rename to 001.ext, 002.ext, etc.
+        for i, f in enumerate(temp_files):
+            final_name = f"{str(i+1).zfill(3)}{f.suffix}"
+            f.rename(f.with_name(final_name))
 
     # --- HTML TEMPLATES ---
     MAIN_HTML_TEMPLATE = """
@@ -96,7 +112,7 @@ def start_web_ui(images_list, port, thumb_size, supported_extensions):
         <div class="header">
             <div>
                 <h2 style="margin:0;">Manual Sort & Advanced Editing</h2>
-                <p style="margin:5px 0 0 0; color:#aaa;">Select images to discard, or click ✏️ to open the leaf folder in an independent merge/delete tool.</p>
+                <p style="margin:5px 0 0 0; color:#aaa;">Select images to discard, or click ✏️ to open the leaf folder in an independent merge/split/delete tool.</p>
             </div>
             <button class="btn" onclick="submitSelection()">Validate & Delete Selection</button>
         </div>
@@ -179,6 +195,9 @@ def start_web_ui(images_list, port, thumb_size, supported_extensions):
             .tooltip { position: absolute; bottom: -20px; left: 50%; transform: translateX(-50%); background: rgba(0, 0, 0, 0.95); color: #fff; padding: 12px; border-radius: 6px; font-size: 13px; white-space: nowrap; opacity: 0; transition: all 0.2s ease; pointer-events: none; z-index: 9999; border: 1px solid #555; box-shadow: 0 4px 10px rgba(0,0,0,0.5); text-align: left; }
             .card:hover .tooltip { opacity: 1; bottom: 45px; }
             
+            .split-icon { position: absolute; top: 6px; right: 6px; background: #8b5cf6; padding: 5px; border-radius: 5px; cursor: pointer; z-index: 10; color: #fff; font-size: 16px; border: 1px solid #444; line-height: 1; transition: 0.2s; }
+            .split-icon:hover { background: #7c3aed; transform: scale(1.1); box-shadow: 0 0 8px #8b5cf6; }
+
             .btn { color: white; padding: 12px 20px; border: none; border-radius: 5px; cursor: pointer; font-size: 14px; font-weight: bold; transition: 0.2s; }
             .btn.primary { background: #3b82f6; }
             .btn.secondary { background: #4b5563; }
@@ -209,6 +228,7 @@ def start_web_ui(images_list, port, thumb_size, supported_extensions):
             {% for item in images %}
                 {% if phase == 1 %}
                     <div class="card" id="card-{{ item.b64 }}" data-b64="{{ item.b64 }}" onclick="toggleSelect('{{ item.b64 }}')">
+                        <div class="split-icon" onclick="openSplit(event, '{{ item.b64 }}')" title="Split this image">✂️</div>
                         <img src="/image/{{ item.b64 }}" loading="lazy" />
                         <div class="card-label">{{ item.display_name }}</div>
                         <div class="tooltip">
@@ -270,6 +290,11 @@ def start_web_ui(images_list, port, thumb_size, supported_extensions):
                     rejected.push(b64);
                 }
             }
+            
+            function openSplit(event, b64) {
+                event.stopPropagation();
+                window.open('/split/' + b64, '_blank');
+            }
 
             function submitSelection(action) {
                 if (selected.length === 0) {
@@ -306,6 +331,141 @@ def start_web_ui(images_list, port, thumb_size, supported_extensions):
                 }).then(res => res.json()).then(data => {
                     if (data.status === 'ok') {
                         document.body.innerHTML = "<div style='text-align:center; margin-top:100px;'><h1>Processing completed!</h1><p>You can safely close this tab.</p></div>";
+                    }
+                });
+            }
+        </script>
+    </body>
+    </html>
+    """
+
+    SPLIT_HTML_TEMPLATE = """
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <title>Split Image Studio</title>
+        <style>
+            body { font-family: 'Segoe UI', Arial, sans-serif; background: #121212; color: #fff; margin: 0; padding: 0; display: flex; flex-direction: column; height: 100vh; }
+            .toolbar { background: #1a1a1a; padding: 15px; border-bottom: 2px solid #333; display: flex; justify-content: space-between; align-items: center; z-index: 1000; box-shadow: 0 2px 10px rgba(0,0,0,0.5); }
+            .controls { display: flex; gap: 12px; align-items: center; }
+            
+            .btn { color: white; padding: 10px 15px; border: none; border-radius: 5px; cursor: pointer; font-weight: bold; transition: 0.2s; font-size: 13px;}
+            .btn.primary { background: #8b5cf6; }
+            .btn.danger { background: #ef4444; }
+            .btn.secondary { background: #4b5563; }
+            .btn:hover { opacity: 0.9; }
+            .btn.active { box-shadow: 0 0 0 3px #10b981; }
+
+            .workspace { flex-grow: 1; overflow: auto; position: relative; display: flex; justify-content: center; align-items: flex-start; padding: 50px; background: #0a0a0a; }
+            
+            .image-container { position: relative; box-shadow: 0 0 20px rgba(0,0,0,0.8); cursor: crosshair; transform-origin: top center; transition: width 0.2s; width: 100%; max-width: 800px; }
+            .image-container img { width: 100%; display: block; user-select: none; pointer-events: none; }
+            
+            .marker-h { position: absolute; left: 0; width: 100%; height: 2px; background: #ef4444; z-index: 10; box-shadow: 0 0 5px #000; pointer-events: none; }
+            .marker-v { position: absolute; top: 0; height: 100%; width: 2px; background: #3b82f6; z-index: 10; box-shadow: 0 0 5px #000; pointer-events: none; }
+        </style>
+    </head>
+    <body>
+        <div class="toolbar">
+            <div>
+                <h3 style="margin:0;">✂️ Image Split Studio</h3>
+                <small style="color:#aaa;">Click anywhere on the image to place your cutting markers.</small>
+            </div>
+            <div class="controls">
+                <button class="btn secondary" onclick="changeZoom(-20)">Zoom -</button>
+                <span id="zoom-level" style="min-width: 45px; text-align: center;">100%</span>
+                <button class="btn secondary" onclick="changeZoom(20)">Zoom +</button>
+                <div style="width: 2px; height: 30px; background: #444; margin: 0 5px;"></div>
+                <button id="btn-mode-h" class="btn active" style="background:#ef4444;" onclick="setMode('h')">Horizontal Cut</button>
+                <button id="btn-mode-v" class="btn" style="background:#3b82f6;" onclick="setMode('v')">Vertical Cut</button>
+                <button class="btn secondary" onclick="clearMarkers()">Clear Markers</button>
+                <button class="btn primary" onclick="submitSplit()">Execute Split</button>
+            </div>
+        </div>
+        
+        <div class="workspace">
+            <div class="image-container" id="img-container" onclick="addMarker(event)">
+                <img src="/image/{{ b64 }}" id="target-image" />
+                <div id="markers-layer"></div>
+            </div>
+        </div>
+
+        <script>
+            let currentZoom = 100; // Reference percentage
+            let mode = 'h'; // 'h' or 'v'
+            let cutsH = []; // Store percentages for responsive cutting
+            let cutsV = [];
+
+            function changeZoom(delta) {
+                currentZoom = Math.max(20, Math.min(500, currentZoom + delta));
+                document.getElementById('zoom-level').innerText = currentZoom + '%';
+                
+                const container = document.getElementById('img-container');
+                container.style.maxWidth = 'none'; // Uncap size for heavy zoom-ins
+                container.style.width = (800 * (currentZoom / 100)) + 'px';
+            }
+
+            function setMode(newMode) {
+                mode = newMode;
+                document.getElementById('btn-mode-h').classList.remove('active');
+                document.getElementById('btn-mode-v').classList.remove('active');
+                document.getElementById('btn-mode-' + newMode).classList.add('active');
+            }
+
+            function addMarker(e) {
+                const rect = e.currentTarget.getBoundingClientRect();
+                const layer = document.getElementById('markers-layer');
+                
+                if (mode === 'h') {
+                    const yPos = e.clientY - rect.top;
+                    const percentY = (yPos / rect.height) * 100;
+                    cutsH.push(percentY);
+                    
+                    const marker = document.createElement('div');
+                    marker.className = 'marker-h';
+                    marker.style.top = percentY + '%';
+                    layer.appendChild(marker);
+                } else {
+                    const xPos = e.clientX - rect.left;
+                    const percentX = (xPos / rect.width) * 100;
+                    cutsV.push(percentX);
+                    
+                    const marker = document.createElement('div');
+                    marker.className = 'marker-v';
+                    marker.style.left = percentX + '%';
+                    layer.appendChild(marker);
+                }
+            }
+
+            function clearMarkers() {
+                cutsH = [];
+                cutsV = [];
+                document.getElementById('markers-layer').innerHTML = '';
+            }
+
+            function submitSplit() {
+                if (cutsH.length === 0 && cutsV.length === 0) {
+                    alert("Please place at least one marker.");
+                    return;
+                }
+                
+                if (!confirm("This will divide the image and sequentially renumber the entire folder. Proceed?")) return;
+
+                fetch('/api_do_split', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        b64: '{{ b64 }}',
+                        cuts_h: cutsH,
+                        cuts_v: cutsV
+                    })
+                }).then(res => res.json()).then(data => {
+                    if (data.status === 'ok') {
+                        alert("Split and sequence renumbering successful! Close this tab and refresh the parent window.");
+                        window.close();
+                    } else {
+                        alert("Error: " + data.message);
                     }
                 });
             }
@@ -366,12 +526,12 @@ def start_web_ui(images_list, port, thumb_size, supported_extensions):
         folder_merges = {k: v for k, v in PENDING_MERGES.items() if v['leaf_dir'] == leaf_dir}
         
         if not folder_merges:
-            # Phase 1: Selection and actions (Delete / Merge)
+            # Phase 1: Selection and actions (Delete / Merge / Split)
             try:
                 files = sorted([
                     f for f in leaf_dir.iterdir()
                     if f.is_file() and f.suffix.lower() in supported_extensions and not f.name.startswith("fus-")
-                ], key=lambda x: x.name)
+                ], key=get_natural_key)
             except Exception as e:
                 return f"Error accessing leaf folder: {e}", 500
                 
@@ -392,7 +552,7 @@ def start_web_ui(images_list, port, thumb_size, supported_extensions):
                 EDITOR_HTML_TEMPLATE,
                 phase=1,
                 title=f"Folder Management: {site_dir.name} / {serie_dir.name} / {leaf_dir.name}",
-                instructions="Select consecutive images to merge them, or permanently delete them from disk.",
+                instructions="Select consecutive images to merge them, click ✂️ to split, or delete them.",
                 images=images_data,
                 main_b64=main_b64,
                 thumb_size=thumb_size
@@ -417,6 +577,67 @@ def start_web_ui(images_list, port, thumb_size, supported_extensions):
                 main_b64=main_b64,
                 thumb_size=thumb_size
             )
+
+    @app.route('/split/<b64>')
+    def split_page(b64):
+        if b64 not in path_map:
+            return "Image not found", 404
+        return render_template_string(SPLIT_HTML_TEMPLATE, b64=b64)
+
+    @app.route('/api_do_split', methods=['POST'])
+    def api_do_split():
+        data = request.json
+        b64 = data.get('b64')
+        cuts_h = data.get('cuts_h', [])
+        cuts_v = data.get('cuts_v', [])
+        
+        target_path = path_map.get(b64)
+        if not target_path or not target_path.exists():
+            return jsonify({"status": "error", "message": "Original image lost or deleted."})
+            
+        leaf_dir = target_path.parent
+        
+        try:
+            with Image.open(target_path) as img:
+                width, height = img.size
+                
+                # Sort cut points and add boundaries
+                h_points = sorted([0] + cuts_h + [100])
+                v_points = sorted([0] + cuts_v + [100])
+                
+                part_counter = 1
+                
+                # Grid slicing loop
+                for i in range(len(h_points) - 1):
+                    for j in range(len(v_points) - 1):
+                        top = int((h_points[i] / 100) * height)
+                        bottom = int((h_points[i+1] / 100) * height)
+                        left = int((v_points[j] / 100) * width)
+                        right = int((v_points[j+1] / 100) * width)
+                        
+                        # Prevent generating 0px images on overlaps
+                        if bottom - top > 0 and right - left > 0:
+                            cropped = img.crop((left, top, right, bottom))
+                            
+                            # Safety check to prevent saving RGBA/Palette as pure JPEG
+                            if cropped.mode in ("RGBA", "P") and target_path.suffix.lower() in [".jpg", ".jpeg"]:
+                                cropped = cropped.convert("RGB")
+                            
+                            temp_name = f"{target_path.stem}_split_{part_counter}{target_path.suffix}"
+                            cropped.save(leaf_dir / temp_name)
+                            part_counter += 1
+                            
+            # Remove original file safely
+            target_path.unlink()
+            
+            # Reprocess all files inside the folder to ensure logical sequencing without conflict
+            resequence_folder(leaf_dir, supported_extensions)
+            
+            return jsonify({"status": "ok"})
+            
+        except Exception as e:
+            logging.error(f"Error during image split for {target_path.name}: {e}")
+            return jsonify({"status": "error", "message": str(e)})
 
     @app.route('/edit_delete', methods=['POST'])
     def edit_delete():
@@ -446,44 +667,34 @@ def start_web_ui(images_list, port, thumb_size, supported_extensions):
         leaf_dir = main_path.parent
         selected_paths = [path_map[b64] for b64 in selected_b64s if b64 in path_map]
         
-        # Extraction and numeric sorting of files
-        numbered = {}
-        for p in selected_paths:
-            try:
-                num = get_number(p.name)
-                numbered[num] = p
-            except ValueError:
-                pass
-                
-        sorted_nums = sorted(numbered.keys())
+        # Tri naturel des fichiers sélectionnés, indépendamment des trous dans la numérotation
+        selected_paths.sort(key=get_natural_key)
+        
         i = 0
-        while i < len(sorted_nums) - 1:
-            curr = sorted_nums[i]
-            nxt = sorted_nums[i + 1]
+        # On traite les fichiers 2 par 2
+        while i < len(selected_paths) - 1:
+            top_path = selected_paths[i]
+            bottom_path = selected_paths[i + 1]
             
-            if nxt == curr + 1:
-                top_path = numbered[curr]
-                bottom_path = numbered[nxt]
+            out_name = f"fus-{top_path.name}"
+            out_path = leaf_dir / out_name
+            
+            try:
+                merge_images_func(top_path, bottom_path, out_path)
+                m_b64 = base64.urlsafe_b64encode(str(out_path).encode('utf-8')).decode('utf-8')
                 
-                out_name = f"fus-{top_path.name}"
-                out_path = leaf_dir / out_name
-                
-                try:
-                    merge_images_func(top_path, bottom_path, out_path)
-                    m_b64 = base64.urlsafe_b64encode(str(out_path).encode('utf-8')).decode('utf-8')
-                    
-                    PENDING_MERGES[m_b64] = {
-                        'merged_path': out_path,
-                        'top_path': top_path,
-                        'bottom_path': bottom_path,
-                        'filename': out_name,
-                        'leaf_dir': leaf_dir
-                    }
-                except Exception as e:
-                    logging.error(f"Assembly error between {top_path.name} and {bottom_path.name}: {e}")
-                i += 2
-            else:
-                i += 1
+                PENDING_MERGES[m_b64] = {
+                    'merged_path': out_path,
+                    'top_path': top_path,
+                    'bottom_path': bottom_path,
+                    'filename': out_name,
+                    'leaf_dir': leaf_dir
+                }
+            except Exception as e:
+                logging.error(f"Assembly error between {top_path.name} and {bottom_path.name}: {e}")
+            
+            i += 2
+            
         return jsonify({"status": "ok"})
 
     @app.route('/edit_finalize', methods=['POST'])
