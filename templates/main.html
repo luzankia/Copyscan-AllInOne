@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Manual Image Sorting</title>
+    <style>
+        body { font-family: 'Segoe UI', Arial, sans-serif; background: #121212; color: #fff; margin: 0; padding: 20px; }
+        .header { display: flex; justify-content: space-between; align-items: center; position: sticky; top: 0; background: #1a1a1a; padding: 15px; z-index: 1000; border-bottom: 2px solid #333; border-radius: 8px; }
+        .gallery { display: flex; flex-wrap: wrap; gap: 20px; justify-content: center; margin-top: 20px; }
+
+        .card { position: relative; cursor: pointer; border: 4px solid transparent; border-radius: 8px; transition: 0.2s; background: #222; text-align: center; width: {{ thumb_size }}; }
+        .card.selected { border-color: #ef4444; box-shadow: 0 0 12px #ef4444; }
+        .card-label { padding: 6px; font-size: 11px; background: #1a1a1a; color: #aaa; word-break: break-all; border-bottom-left-radius: 4px; border-bottom-right-radius: 4px; }
+
+        img { width: 100%; height: auto; max-height: 400px; display: block; object-fit: contain; border-top-left-radius: 4px; border-top-right-radius: 4px; }
+
+        .edit-icon { position: absolute; top: 6px; right: 6px; background: rgba(0, 0, 0, 0.8); padding: 5px; border-radius: 5px; cursor: pointer; z-index: 10; color: #fff; font-size: 16px; transition: 0.2s; border: 1px solid #444; line-height: 1; }
+        .edit-icon:hover { background: #3b82f6; border-color: #60a5fa; transform: scale(1.1); }
+
+        .tooltip { position: absolute; bottom: -20px; left: 50%; transform: translateX(-50%); background: rgba(0, 0, 0, 0.95); color: #fff; padding: 12px; border-radius: 6px; font-size: 13px; white-space: nowrap; opacity: 0; transition: all 0.2s ease; pointer-events: none; z-index: 9999; border: 1px solid #555; box-shadow: 0 4px 10px rgba(0,0,0,0.5); text-align: left; }
+        .card:hover .tooltip { opacity: 1; bottom: 35px; }
+
+        .btn { background: #ef4444; color: white; padding: 12px 24px; border: none; border-radius: 5px; cursor: pointer; font-size: 15px; font-weight: bold; transition: 0.2s; }
+        .btn:hover { opacity: 0.9; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div>
+            <h2 style="margin:0;">Manual Sort & Advanced Editing</h2>
+            <p style="margin:5px 0 0 0; color:#aaa;">Select images to discard, or click ✏️ to open the leaf folder in the merge/split/delete tool.</p>
+        </div>
+        <button class="btn" onclick="submitSelection()">Validate & Delete Selection</button>
+    </div>
+
+    <div class="gallery">
+        {% for item in images %}
+            <div class="card" id="card-{{ item.b64 }}" onclick="toggleSelect('{{ item.b64 }}')">
+                <div class="edit-icon" onclick="openEditor(event, '{{ item.b64 }}')" title="Open leaf folder manager">✏️</div>
+                <img src="/image/{{ item.b64 }}" loading="lazy" />
+                <div class="card-label">Leaf Preview</div>
+                <div class="tooltip">
+                    <strong>Chapter:</strong> {{ item.chapter }}<br>
+                    <strong>Serie:</strong> {{ item.serie }}<br>
+                    <strong>Site:</strong> {{ item.site }}
+                </div>
+            </div>
+        {% endfor %}
+    </div>
+
+    <script>
+        let toDelete = [];
+
+        function toggleSelect(b64) {
+            const el = document.getElementById('card-' + b64);
+            el.classList.toggle('selected');
+            if (toDelete.includes(b64)) {
+                toDelete = toDelete.filter(id => id !== b64);
+            } else {
+                toDelete.push(b64);
+            }
+        }
+
+        function openEditor(event, b64) {
+            event.stopPropagation();
+            window.location.href = '/edit/' + b64;
+        }
+
+        function submitSelection() {
+            if (toDelete.length === 0) {
+                if (!confirm("No images selected for global deletion. Proceed to next step?")) return;
+            } else {
+                if (!confirm("Are you sure you want to permanently delete the " + toDelete.length + " selected item(s)?")) return;
+            }
+
+            fetch('/validate', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({to_delete: toDelete})
+            }).then(res => res.json()).then(data => {
+                document.body.innerHTML = "<div style='text-align:center; margin-top:100px;'><h1>Changes saved!</h1><p>The workflow is resuming in the console...</p></div>";
+            });
+        }
+    </script>
+</body>
+</html>

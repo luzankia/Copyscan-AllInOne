@@ -1,0 +1,58 @@
+# Global Configuration
+# Copy this file to "config.yaml" and adjust every path below to your own setup.
+# config.yaml is gitignored on purpose: it will contain paths specific to your machine.
+root_dir: "C:\\Path\\To\\Your\\Input"
+dest_dir: "C:\\Path\\To\\Your\\Output"
+csv_1_path: "C:\\Path\\To\\Your\\Project\\exception.txt"
+csv_2_path: "C:\\Path\\To\\Your\\Project\\batchexception.txt"
+log_path: "C:\\Path\\To\\Your\\Project\\workflow.log"
+
+# Supported extension in the workflow
+supported_extensions:
+  - ".jpg"
+  - ".jpeg"
+  - ".png"
+  - ".webp"
+  - ".avif"
+  - ".bmp"
+  - ".gif"
+
+# Timing & Ports
+sleep_time: 1
+im_timeout: 20
+web_port: 5002
+thumb_size: "220px"
+
+# Workflow Steps Activation
+steps_active:
+  step_1: true  # Integrity Check (ImageMagick)
+  step_2: true  # Manual Sort via Web Interface
+  step_3: true  # Cleanup via Regex (Files)
+  step_4: true  # Delete Empty Folders
+  step_5: true  # Rename Leaf Folders (Regex)
+  step_6: true  # Compress Leaf Folders to CBZ (7-Zip)
+  step_7: true  # Rename/Suffix Parent2 via CSV
+  step_8: true  # Move to destination & Final Cleanup
+
+# Regex configurations
+delete_regex:
+  - '^\.nomedia$'
+
+# Rename Leaf Folders (First match applies)
+rename_regex:
+  - pattern: '^(?:.*_)?(?:Chapter|Ch\.)\s*(\d+(?:\.\d+)?)\s+-\s+Episode\s+\d+(?:\.\d+)?(.*)'
+    replacement: 'Ch.\1\2'
+  - pattern: '^(?:.*_)?Chapter\s+(\d+(?:\.\d+)?)(.*)'
+    replacement: 'Ch.\1\2'
+  - pattern: '^.*_((?:Vol\.\d+\s+)?Ch\.\d+.*)'
+    replacement: '\1'
+  - pattern: '^.*_Volume\s+\d+\s+Chapter\s+(\d+(?:\.\d+)?)\s+_\s+(.*)'
+    replacement: 'Ch.\1 - \2'
+  - pattern: '^Episode\s+\d+\s+\((ch\.\s+\d+)\)(.*)'
+    replacement: '\1\2'
+  - pattern: '^\((S\d+)\)\s+Ep\.\s+\d+\s+(.*?)\s*\((ch\.\s+\d+)\)(.*)'
+    replacement: '\1 \3 \2\4'
+  - pattern: '^Ep\.\d+\s+\((ch\.\s+\d+)\)(.*)'
+    replacement: '\1\2'
+  - pattern: '^Ep\.\s*\d+\s+-\s+(.*?)\s*\((ch\.\s*\d+)\)(.*)'
+    replacement: '\2 - \1\3'

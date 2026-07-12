@@ -216,3 +216,7 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Copyscan-AllInOne: personnal configuration (local paths), do not upload.
+# Use config.example.yaml as model.
+config.yaml

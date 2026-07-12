@@ -7,29 +7,90 @@ from pathlib import Path
 from utils import setup_environment, check_prerequisites, console
 import workflow
 
+# Étapes valides pouvant être passées à --skip-step (inclut la sous-étape 5.1)
+VALID_STEP_TOKENS = ["1", "2", "3", "4", "5", "5.1", "6", "7", "8"]
+
+# Clés obligatoires attendues dans config.yaml, avec leur type Python attendu
+REQUIRED_CONFIG_KEYS = {
+    "root_dir": str,
+    "dest_dir": str,
+    "csv_1_path": str,
+    "csv_2_path": str,
+    "log_path": str,
+    "supported_extensions": list,
+    "sleep_time": (int, float),
+    "im_timeout": (int, float),
+    "web_port": int,
+    "thumb_size": str,
+    "steps_active": dict,
+    "delete_regex": list,
+    "rename_regex": list,
+}
+
 def load_config(config_path="config.yaml"):
     try:
         with open(config_path, 'r', encoding='utf-8') as f:
-            return yaml.safe_load(f)
+            config = yaml.safe_load(f)
+    except FileNotFoundError:
+        console.print(f"[bold red]Config file not found: {config_path}[/bold red]")
+        console.print("[yellow]Copy 'config.example.yaml' to 'config.yaml' and adjust it to your setup.[/yellow]")
+        sys.exit(1)
     except Exception as e:
-        console.print(f"[bold red]Failed to load config.yaml: {e}[/bold red]")
+        console.print(f"[bold red]Failed to load {config_path}: {e}[/bold red]")
+        sys.exit(1)
+
+    validate_config(config, config_path)
+    return config
+
+def validate_config(config, config_path):
+    """Vérifie que toutes les clés requises sont présentes et correctement typées."""
+    if not isinstance(config, dict):
+        console.print(f"[bold red]Invalid config: {config_path} does not contain a valid YAML mapping.[/bold red]")
+        sys.exit(1)
+
+    missing = [key for key in REQUIRED_CONFIG_KEYS if key not in config]
+    if missing:
+        console.print(f"[bold red]Missing required key(s) in {config_path}: {', '.join(missing)}[/bold red]")
+        console.print("[yellow]See 'config.example.yaml' for the full expected structure.[/yellow]")
+        sys.exit(1)
+
+    wrong_type = []
+    for key, expected_type in REQUIRED_CONFIG_KEYS.items():
+        if not isinstance(config[key], expected_type):
+            wrong_type.append(f"'{key}' (expected {expected_type})")
+    if wrong_type:
+        console.print(f"[bold red]Invalid type for key(s) in {config_path}: {', '.join(wrong_type)}[/bold red]")
         sys.exit(1)
 
 def parse_cli_args(config):
     parser = argparse.ArgumentParser(description="Image Processing Workflow CLI")
     parser.add_argument("--root-dir", type=str, help="Override root_dir")
     parser.add_argument("--dest-dir", type=str, help="Override dest_dir")
-    parser.add_argument("--skip-step", type=int, nargs='+', help="Steps to skip (1-8)", default=[])
-    
+    parser.add_argument(
+        "--skip-step",
+        type=str,
+        nargs='+',
+        help="Steps to skip, e.g. '2 5.1 6' (valid values: 1, 2, 3, 4, 5, 5.1, 6, 7, 8)",
+        default=[]
+    )
+
     args = parser.parse_args()
-    
+
     if args.root_dir: config['root_dir'] = args.root_dir
     if args.dest_dir: config['dest_dir'] = args.dest_dir
-    
+
+    invalid = [s for s in args.skip_step if s not in VALID_STEP_TOKENS]
+    if invalid:
+        console.print(f"[bold red]Invalid --skip-step value(s): {', '.join(invalid)}[/bold red]")
+        console.print(f"[yellow]Valid values are: {', '.join(VALID_STEP_TOKENS)}[/yellow]")
+        sys.exit(1)
+
     for step in args.skip_step:
-        step_key = f"step_{step}"
-        if step_key in config['steps_active']:
-            config['steps_active'][step_key] = False
+        step_key = f"step_{step.replace('.', '_')}"
+        # step_5_1 peut être absent de steps_active si non défini explicitement
+        # dans config.yaml : on l'ajoute quand même pour que --skip-step 5.1
+        # soit toujours respecté par execute_workflow.
+        config['steps_active'][step_key] = False
 
     return config
 

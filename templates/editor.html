@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>{{ title }}</title>
+    <style>
+        body { font-family: 'Segoe UI', Arial, sans-serif; background: #121212; color: #fff; margin: 0; padding: 20px; }
+        .header { position: sticky; top: 0; background: #1a1a1a; padding: 15px; z-index: 1000; border-bottom: 2px solid #333; display: flex; justify-content: space-between; align-items: center; border-radius: 8px; }
+        .instructions { font-size: 14px; color: #aaa; margin: 5px 0 0 0; }
+        .actions { display: flex; gap: 10px; }
+        .gallery { display: flex; flex-wrap: wrap; gap: 20px; justify-content: center; margin-top: 20px; }
+
+        .card { position: relative; cursor: pointer; border: 4px solid transparent; border-radius: 8px; transition: 0.2s; background: #222; text-align: center; width: {{ thumb_size }}; }
+        .card.selected { border-color: #3b82f6; box-shadow: 0 0 12px #3b82f6; }
+        .card.approved { border-color: #10b981; }
+        .card.rejected { border-color: #ef4444; opacity: 0.3; }
+
+        .card-label { padding: 6px; font-size: 12px; background: #1a1a1a; color: #ccc; word-break: break-all; border-bottom-left-radius: 4px; border-bottom-right-radius: 4px; }
+
+        img { width: 100%; height: auto; display: block; object-fit: contain; max-height: 400px; border-top-left-radius: 4px; border-top-right-radius: 4px; }
+
+        .tooltip { position: absolute; bottom: -20px; left: 50%; transform: translateX(-50%); background: rgba(0, 0, 0, 0.95); color: #fff; padding: 12px; border-radius: 6px; font-size: 13px; white-space: nowrap; opacity: 0; transition: all 0.2s ease; pointer-events: none; z-index: 9999; border: 1px solid #555; box-shadow: 0 4px 10px rgba(0,0,0,0.5); text-align: left; }
+        .card:hover .tooltip { opacity: 1; bottom: 45px; }
+
+        .split-icon { position: absolute; top: 6px; right: 6px; background: #8b5cf6; padding: 5px; border-radius: 5px; cursor: pointer; z-index: 10; color: #fff; font-size: 16px; border: 1px solid #444; line-height: 1; transition: 0.2s; }
+        .split-icon:hover { background: #7c3aed; transform: scale(1.1); box-shadow: 0 0 8px #8b5cf6; }
+
+        .btn { color: white; padding: 12px 20px; border: none; border-radius: 5px; cursor: pointer; font-size: 14px; font-weight: bold; transition: 0.2s; }
+        .btn.primary { background: #3b82f6; }
+        .btn.secondary { background: #4b5563; }
+        .btn.danger { background: #ef4444; }
+        .btn.success { background: #10b981; }
+        .btn:hover { opacity: 0.9; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div>
+            <h2 style="margin:0;">{{ title }}</h2>
+            <p class="instructions">{{ instructions }}</p>
+        </div>
+        <div class="actions">
+            <button class="btn secondary" onclick="window.location.href = '/'">← Back to main page</button>
+            {% if phase == 1 %}
+                <button class="btn secondary" onclick="selectAll()">Select All</button>
+                <button class="btn secondary" onclick="deselectAll()">Deselect All</button>
+                <button class="btn primary" onclick="submitSelection('merge')">Merge Pairs</button>
+                <button class="btn danger" onclick="submitSelection('delete')">Delete Selection</button>
+            {% else %}
+                <button class="btn success" onclick="submitValidation()">Validate & Finalize Merges</button>
+            {% endif %}
+        </div>
+    </div>
+
+    <div class="gallery">
+        {% for item in images %}
+            {% if phase == 1 %}
+                <div class="card" id="card-{{ item.b64 }}" data-b64="{{ item.b64 }}" onclick="toggleSelect('{{ item.b64 }}')">
+                    <div class="split-icon" onclick="openSplit(event, '{{ item.b64 }}')" title="Split this image">✂️</div>
+                    <img src="/image/{{ item.b64 }}" loading="lazy" />
+                    <div class="card-label">{{ item.display_name }}</div>
+                    <div class="tooltip">
+                        <strong>Chapter:</strong> {{ item.chapter }}<br>
+                        <strong>Serie:</strong> {{ item.serie }}<br>
+                        <strong>Site:</strong> {{ item.site }}
+                    </div>
+                </div>
+            {% else %}
+                <div class="card approved" id="card-{{ item.b64 }}" data-b64="{{ item.b64 }}" onclick="toggleReject('{{ item.b64 }}')">
+                    <img src="/image/{{ item.b64 }}" loading="lazy" />
+                    <div class="card-label">{{ item.display_name }}</div>
+                    <div class="tooltip">
+                        <strong>Chapter:</strong> {{ item.chapter }}<br>
+                        <strong>Serie:</strong> {{ item.serie }}<br>
+                        <strong>Site:</strong> {{ item.site }}
+                    </div>
+                </div>
+            {% endif %}
+        {% endfor %}
+    </div>
+
+    <script>
+        let selected = [];
+        let rejected = [];
+
+        function toggleSelect(b64) {
+            const el = document.getElementById('card-' + b64);
+            el.classList.toggle('selected');
+            if (selected.includes(b64)) {
+                selected = selected.filter(id => id !== b64);
+            } else {
+                selected.push(b64);
+            }
+        }
+
+        function selectAll() {
+            selected = [];
+            document.querySelectorAll('.card').forEach(card => {
+                card.classList.add('selected');
+                selected.push(card.getAttribute('data-b64'));
+            });
+        }
+
+        function deselectAll() {
+            document.querySelectorAll('.card').forEach(card => {
+                card.classList.remove('selected');
+            });
+            selected = [];
+        }
+
+        function toggleReject(b64) {
+            const el = document.getElementById('card-' + b64);
+            el.classList.toggle('approved');
+            el.classList.toggle('rejected');
+            if (rejected.includes(b64)) {
+                rejected = rejected.filter(id => id !== b64);
+            } else {
+                rejected.push(b64);
+            }
+        }
+
+        function openSplit(event, b64) {
+            event.stopPropagation();
+            window.location.href = '/split/' + b64 + '?return_to=' + encodeURIComponent('{{ main_b64 }}');
+        }
+
+        function submitSelection(action) {
+            if (selected.length === 0) {
+                alert("Please select at least one image.");
+                return;
+            }
+
+            if (action === 'delete') {
+                if (!confirm("Warning! Do you really want to permanently DELETE the selected images?")) return;
+                fetch('/edit_delete', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({selected: selected})
+                }).then(res => res.json()).then(data => {
+                    if (data.status === 'ok') window.location.reload();
+                });
+            } else if (action === 'merge') {
+                fetch('/edit_merge', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({selected: selected, main_b64: '{{ main_b64 }}'})
+                }).then(res => res.json()).then(data => {
+                    if (data.status === 'ok') window.location.reload();
+                    else alert("Error: " + data.message);
+                });
+            }
+        }
+
+        function submitValidation() {
+            fetch('/edit_finalize', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({rejected: rejected, main_b64: '{{ main_b64 }}'})
+            }).then(res => res.json()).then(data => {
+                if (data.status === 'ok') {
+                    window.location.href = '/edit/{{ main_b64 }}';
+                } else {
+                    alert("Error: " + data.message);
+                }
+            });
+        }
+    </script>
+</body>
+</html>

@@ -24,7 +24,6 @@ def handle_step_error(errors, step_name, allow_rescan=False) -> str:
     for err in errors:
         logging.warning(f"[{step_name}] {err}")
     
-    # CORRECTION : On affiche l'intégralité de la liste sans le filtre [:5]
     for err in errors:
         console.print(f"[red]  - {err}[/red]")
         
@@ -59,10 +58,10 @@ def step_1_integrity(config):
             console.print("[blue]Step 1: No image files found to check.[/blue]")
             return "next"
 
-        # Fonction travailleur pour un seul fichier
+        # Function for checking a single file
         def check_single_file(file_path):
             try:
-                # Ajout de l'option "-verbose" pour une détection ultra-stricte
+                # Adding the "-verbose" option for ultra-strict detection
                 res = subprocess.run(
                     ["magick", "identify", "-verbose", "-regard-warnings", str(file_path)],
                     capture_output=True,
@@ -81,7 +80,7 @@ def step_1_integrity(config):
         with Progress() as progress:
             task = progress.add_task("[cyan]Step 1: Checking image integrity (Strict Parallel)...", total=len(files_to_check))
             
-            # Utilisation de ThreadPoolExecutor pour paralléliser les appels processus
+            # Using ThreadPoolExecutor for parallelizing process calls
             with ThreadPoolExecutor(max_workers=os.cpu_count()) as executor:
                 futures = [executor.submit(check_single_file, f) for f in files_to_check]
                 
@@ -214,7 +213,6 @@ def step_5_1_clean_hash_suffix(config):
     root_dir = Path(config['root_dir'])
     errors = []
     
-    # Compilation du pattern fourni : capture tout ce qui précède le "_" final suivi d'un hash
     pattern = re.compile(r'^(.+)_[A-Za-z0-9]+$')
     leafs = list(get_leaf_dirs(root_dir))
     
@@ -223,12 +221,12 @@ def step_5_1_clean_hash_suffix(config):
         for leaf in leafs:
             match = pattern.match(leaf.name)
             if match:
-                # Le groupe 1 contient le nom nettoyé du dossier
+                # The first group contains the cleaned folder name
                 new_name = match.group(1).strip()
                 new_path = leaf.parent / new_name
                 
                 if new_path != leaf:
-                    # Résolution de conflit native (gère les doublons ' (1)', ' (2)', etc.)
+                    # Native conflict resolution (handles duplicates ' (1)', ' (2)', etc.)
                     new_path = resolve_conflict(new_path, is_file=False)
                     try:
                         leaf.rename(new_path)
@@ -247,14 +245,14 @@ def step_6_compress(config):
     leafs = list(get_leaf_dirs(root_dir))
     executable = "7za" if shutil.which("7za") else "7z"
     
-    # Fonction travailleur pour compresser un seul dossier Leaf
+    # Function for compressing a single Leaf folder
     def compress_single_leaf(leaf):
         archive_path = leaf.parent / f"{leaf.name}.cbz"
         archive_path = resolve_conflict(archive_path, is_file=True)
         
         try:
-            # Note : On force 7z à utiliser 1 ou 2 threads par archive (-mmt=2) 
-            # pour éviter qu'une seule archive ne vole tous les coeurs du CPU.
+            # Note : we force 7z to only use 2 threads.
+            # To avoid a single archive from consuming all CPU cores.
             cmd_add = [executable, "a", "-tzip", "-r", "-mmt=2", str(archive_path), str(leaf) + os.sep]
             res_add = subprocess.run(cmd_add, capture_output=True)
             if res_add.returncode != 0:
@@ -277,8 +275,8 @@ def step_6_compress(config):
     with Progress() as progress:
         task = progress.add_task("[cyan]Step 6: Compressing Leaf folders (Parallel)...", total=len(leafs))
         
-        # On limite ici à un nombre raisonnable (ex: 4 dossiers max en même temps) 
-        # pour ne pas saturer le disque dur en écritures simultanées.
+        # We limit the number of concurrent threads to a reasonable amount (e.g., 4 folders at a time)
+        # to avoid overwhelming the disk with simultaneous write operations.
         max_compress_threads = min(4, os.cpu_count() or 1)
         with ThreadPoolExecutor(max_workers=max_compress_threads) as executor:
             futures = [executor.submit(compress_single_leaf, leaf) for leaf in leafs]
