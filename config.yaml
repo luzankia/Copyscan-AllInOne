@@ -23,7 +23,7 @@ thumb_size: "220px"
 
 # Workflow Steps Activation
 steps_active:
-  step_1: true  # Integrity Check (ImageMagick)
+  step_1: false  # Integrity Check (ImageMagick)
   step_2: true  # Manual Sort via Web Interface
   step_3: true  # Cleanup via Regex (Files)
   step_4: true  # Delete Empty Folders
@@ -31,6 +31,9 @@ steps_active:
   step_6: true  # Compress Leaf Folders to CBZ (7-Zip)
   step_7: true  # Rename/Suffix Parent2 via CSV
   step_8: true  # Move to destination & Final Cleanup
+
+# Security Configurations
+mask_security_popups: true
 
 # Regex configurations
 delete_regex:

@@ -34,6 +34,9 @@ steps_active:
   step_7: true  # Rename/Suffix Parent2 via CSV
   step_8: true  # Move to destination & Final Cleanup
 
+# Security Configurations
+mask_security_popups: false
+
 # Regex configurations
 delete_regex:
   - '^\.nomedia$'

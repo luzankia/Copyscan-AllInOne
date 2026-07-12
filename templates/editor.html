@@ -7,7 +7,7 @@
         body { font-family: 'Segoe UI', Arial, sans-serif; background: #121212; color: #fff; margin: 0; padding: 20px; }
         .header { position: sticky; top: 0; background: #1a1a1a; padding: 15px; z-index: 1000; border-bottom: 2px solid #333; display: flex; justify-content: space-between; align-items: center; border-radius: 8px; }
         .instructions { font-size: 14px; color: #aaa; margin: 5px 0 0 0; }
-        .actions { display: flex; gap: 10px; }
+        .actions { display: flex; gap: 10px; align-items: center; }
         .gallery { display: flex; flex-wrap: wrap; gap: 20px; justify-content: center; margin-top: 20px; }
 
         .card { position: relative; cursor: pointer; border: 4px solid transparent; border-radius: 8px; transition: 0.2s; background: #222; text-align: center; width: {{ thumb_size }}; }
@@ -31,6 +31,9 @@
         .btn.danger { background: #ef4444; }
         .btn.success { background: #10b981; }
         .btn:hover { opacity: 0.9; }
+        
+        /* Petit ajout pour séparer visuellement la navigation du reste des actions */
+        .nav-separator { width: 2px; height: 30px; background-color: #444; margin: 0 5px; }
     </style>
 </head>
 <body>
@@ -40,7 +43,20 @@
             <p class="instructions">{{ instructions }}</p>
         </div>
         <div class="actions">
-            <button class="btn secondary" onclick="window.location.href = '/'">← Back to main page</button>
+            <button class="btn secondary" onclick="window.location.href = '/'">← Back to main</button>
+            
+            <div class="nav-separator"></div>
+            
+            {% if prev_url %}
+                <button class="btn secondary" onclick="window.location.href = '{{ prev_url }}'">⏮ Prev Chapter</button>
+            {% endif %}
+            
+            {% if next_url %}
+                <button class="btn secondary" onclick="window.location.href = '{{ next_url }}'">Next Chapter ⏭</button>
+            <div class="nav-separator"></div>
+                {% endif %}
+            
+            
             {% if phase == 1 %}
                 <button class="btn secondary" onclick="selectAll()">Select All</button>
                 <button class="btn secondary" onclick="deselectAll()">Deselect All</button>

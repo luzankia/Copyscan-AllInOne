@@ -151,6 +151,30 @@ def start_web_ui(images_list, port, thumb_size, supported_extensions):
         
         if not folder_merges:
             # Phase 1: Selection and actions (Delete / Merge / Split)
+            
+            try:
+                current_idx = leaf_dirs.index(leaf_dir)
+            except ValueError:
+                current_idx = -1
+
+            prev_url = None
+            if current_idx > 0:
+                prev_leaf = leaf_dirs[current_idx - 1]
+                prev_first = get_current_first_image(prev_leaf)
+                if prev_first:
+                    prev_b64 = base64.urlsafe_b64encode(str(prev_first).encode('utf-8')).decode('utf-8')
+                    path_map[prev_b64] = prev_first
+                    prev_url = f"/edit/{prev_b64}"
+
+            next_url = None
+            if current_idx != -1 and current_idx < len(leaf_dirs) - 1:
+                next_leaf = leaf_dirs[current_idx + 1]
+                next_first = get_current_first_image(next_leaf)
+                if next_first:
+                    next_b64 = base64.urlsafe_b64encode(str(next_first).encode('utf-8')).decode('utf-8')
+                    path_map[next_b64] = next_first
+                    next_url = f"/edit/{next_b64}"
+            
             try:
                 files = sorted([
                     f for f in leaf_dir.iterdir()
@@ -179,7 +203,9 @@ def start_web_ui(images_list, port, thumb_size, supported_extensions):
                 instructions="Select consecutive images to merge them, click ✂️ to split, or delete them.",
                 images=images_data,
                 main_b64=main_b64,
-                thumb_size=thumb_size
+                thumb_size=thumb_size,
+                prev_url=prev_url,
+                next_url=next_url
             )
         else:
             # Phase 2: Validation of generated merges
@@ -199,7 +225,9 @@ def start_web_ui(images_list, port, thumb_size, supported_extensions):
                 instructions="Verify the results. Green borders are kept; click to reject an assembly.",
                 images=images_data,
                 main_b64=main_b64,
-                thumb_size=thumb_size
+                thumb_size=thumb_size,
+                prev_url=None,
+                next_url=None
             )
 
     @app.route('/split/<b64>')
