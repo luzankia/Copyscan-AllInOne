@@ -84,9 +84,17 @@ def check_prerequisites(config):
             input("\nPress Enter to exit...")
             sys.exit(1)
 
-def get_leaf_dirs(root_dir: Path):
-    """Yield all Leaf directories (Root -> Parent1 -> Parent2 -> Leaf)."""
+def get_leaf_dirs(root_dir: Path, local_mode=False):
+    """Yield all Leaf directories.
+    Standard layout: Root -> Parent1 -> Parent2 -> Leaf.
+    Local layout (--local): Root -> Leaf (Leaf folders sit directly under root_dir).
+    """
     if not root_dir.exists():
+        return
+    if local_mode:
+        for leaf in root_dir.iterdir():
+            if leaf.is_dir():
+                yield leaf
         return
     for p1 in root_dir.iterdir():
         if p1.is_dir():

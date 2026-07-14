@@ -45,11 +45,12 @@ def step_1_integrity(config):
     root_dir = Path(config['root_dir'])
     timeout = config['im_timeout']
     exts = set(config['supported_extensions'])
+    local_mode = config.get('local_mode', False)
 
     while True:
         errors = []
         files_to_check = []
-        for leaf in get_leaf_dirs(root_dir):
+        for leaf in get_leaf_dirs(root_dir, local_mode):
             files_to_check.extend([
                 f for f in leaf.iterdir()
                 if f.is_file() and f.suffix.lower() in exts
@@ -99,9 +100,10 @@ def step_2_web_ui(config):
     root_dir = Path(config['root_dir'])
     port = config['web_port']
     exts = set(config['supported_extensions'])
+    local_mode = config.get('local_mode', False)
 
     first_images = []
-    for leaf in get_leaf_dirs(root_dir):
+    for leaf in get_leaf_dirs(root_dir, local_mode):
         files = sorted([
             f for f in leaf.iterdir() 
             if f.is_file() and f.suffix.lower() in exts
@@ -134,10 +136,11 @@ def step_2_web_ui(config):
 def step_3_regex_clean(config):
     root_dir = Path(config['root_dir'])
     patterns = [re.compile(p) for p in config['delete_regex']]
+    local_mode = config.get('local_mode', False)
     errors = []
     
     files = []
-    for leaf in get_leaf_dirs(root_dir):
+    for leaf in get_leaf_dirs(root_dir, local_mode):
         files.extend([f for f in leaf.iterdir() if f.is_file()])
         
     with Progress() as progress:
@@ -181,9 +184,10 @@ def step_4_delete_empty(config):
 def step_5_rename_leaf(config):
     root_dir = Path(config['root_dir'])
     rename_rules = config['rename_regex']
+    local_mode = config.get('local_mode', False)
     errors = []
     
-    leafs = list(get_leaf_dirs(root_dir))
+    leafs = list(get_leaf_dirs(root_dir, local_mode))
     
     with Progress() as progress:
         task = progress.add_task("[cyan]Step 5: Renaming Leaf folders...", total=len(leafs))
@@ -213,10 +217,11 @@ def step_5_rename_leaf(config):
 
 def step_5_1_clean_hash_suffix(config):
     root_dir = Path(config['root_dir'])
+    local_mode = config.get('local_mode', False)
     errors = []
     
     pattern = re.compile(r'^(.+)_[A-Za-z0-9]+$')
-    leafs = list(get_leaf_dirs(root_dir))
+    leafs = list(get_leaf_dirs(root_dir, local_mode))
     
     with Progress() as progress:
         task = progress.add_task("[cyan]Step 5.1: Cleaning hash suffixes from Leaf folders...", total=len(leafs))
@@ -242,9 +247,10 @@ def step_5_1_clean_hash_suffix(config):
 
 def step_6_compress(config):
     root_dir = Path(config['root_dir'])
+    local_mode = config.get('local_mode', False)
     errors = []
     
-    leafs = list(get_leaf_dirs(root_dir))
+    leafs = list(get_leaf_dirs(root_dir, local_mode))
     use_zipfile_fallback = config.get('use_zipfile_fallback', False)
     executable = "7za" if shutil.which("7za") else "7z"
 
@@ -317,6 +323,12 @@ def step_7_csv_rename(config):
     csv_2 = Path(config['csv_2_path'])
     errors = []
 
+    if config.get('local_mode', False):
+        # Step 7 relies on the root_dir/Parent1/Parent2 hierarchy, which doesn't
+        # exist in local mode (Leaf folders sit directly under root_dir).
+        console.print("[blue]Step 7: Skipped (incompatible with --local, no Parent1/Parent2 hierarchy).[/blue]")
+        return "next"
+
     # Step 7.1: Rename
     if csv_1.exists():
         with open(csv_1, 'r', encoding='utf-8') as f:
@@ -349,19 +361,31 @@ def step_7_csv_rename(config):
 def step_8_final_move(config):
     root_dir = Path(config['root_dir'])
     dest_dir = Path(config['dest_dir'])
+    local_mode = config.get('local_mode', False)
     errors = []
     
-    parent2_dirs = list(get_parent2_dirs(root_dir))
     dest_dir.mkdir(parents=True, exist_ok=True)
+
+    if local_mode:
+        # Local layout: Leaf folders sit directly under root_dir, move them straight to dest_dir.
+        items_to_move = list(get_leaf_dirs(root_dir, local_mode=True))
+    else:
+        items_to_move = list(get_parent2_dirs(root_dir))
     
     with Progress() as progress:
-        task = progress.add_task("[cyan]Step 8: Moving and final cleanup...", total=len(parent2_dirs))
+        task = progress.add_task("[cyan]Step 8: Moving and final cleanup...", total=len(items_to_move))
         
         # Move Phase
-        for p1, p2 in parent2_dirs:
-            target_p2 = dest_dir / p2.name
-            merge_directories(p2, target_p2, errors)
-            progress.advance(task)
+        if local_mode:
+            for leaf in items_to_move:
+                target = dest_dir / leaf.name
+                merge_directories(leaf, target, errors)
+                progress.advance(task)
+        else:
+            for p1, p2 in items_to_move:
+                target_p2 = dest_dir / p2.name
+                merge_directories(p2, target_p2, errors)
+                progress.advance(task)
             
     # Cleanup Phase (Delete empty folders in root)
     for dirpath, dirnames, filenames in os.walk(str(root_dir), topdown=False):

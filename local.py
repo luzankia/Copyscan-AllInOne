@@ -92,7 +92,8 @@ def main():
         cmd = [
             sys.executable, "main.py", 
             "--root-dir", target_dir, 
-            "--skip-step", "1", "3", "4", "5", "5.1", "6", "7", "8"
+            "--skip-step", "1", "3", "4", "5.1", "7", "8",
+            "--local"
         ]
         
         try:

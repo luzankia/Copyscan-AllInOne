@@ -70,6 +70,12 @@ def parse_cli_args(config):
     parser.add_argument("--dest-dir", type=str, help="Override dest_dir")
     parser.add_argument("--log-path", type=str, help="Override log_path (log file destination)")
     parser.add_argument(
+        "--local",
+        action="store_true",
+        help="Leaf folders sit directly under root_dir instead of the standard "
+             "root_dir/Parent1/Parent2/Leaf structure."
+    )
+    parser.add_argument(
         "--skip-step",
         type=str,
         nargs='+',
@@ -82,6 +88,7 @@ def parse_cli_args(config):
     if args.root_dir: config['root_dir'] = args.root_dir
     if args.dest_dir: config['dest_dir'] = args.dest_dir
     if args.log_path: config['log_path'] = args.log_path
+    if args.local: config['local_mode'] = True
 
     invalid = [s for s in args.skip_step if s not in VALID_STEP_TOKENS]
     if invalid:

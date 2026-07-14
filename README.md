@@ -23,6 +23,7 @@
   * If ImageMagick is missing, the CLI offers to skip the integrity check step for the current run instead of hard-failing.
   * If 7-Zip is missing, the CLI offers to fall back to Python's built-in `zipfile` module for compression (7-Zip remains the preferred, faster option when available).
 * **Flexible logging**: log file location can be overridden per run via `--log-path`, disabled entirely via `log_enabled: false` in `config.yaml`, and the destination folder is created automatically if it doesn't exist.
+* **Flexible folder layout**: works with the standard `root_dir/Parent1/Parent2/Leaf` hierarchy by default, or with a flat `root_dir/Leaf` layout via `--local`, for one-off or single-series batches.
 * **Safe, no-data-loss logic**: Suffix-safe renaming and non-destructive operations.
 
 ---
@@ -51,7 +52,7 @@ pip install -r requirements.txt
 
 ## Directory Structure
 
-Required hierarchy for processing:
+Standard hierarchy (default):
 
 ```text
 Root/
@@ -60,6 +61,15 @@ Root/
           └─ Chapter (Leaf)/
                 ├─ image1.jpg
                 └─ ...
+```
+
+Flat hierarchy (with `--local`):
+
+```text
+Root/
+  └─ Chapter (Leaf)/
+        ├─ image1.jpg
+        └─ ...
 ```
 
 ---
@@ -76,6 +86,7 @@ python main.py
 * **CLI Overrides**:
   * `--root-dir <path>` / `--dest-dir <path>` — override `root_dir` / `dest_dir` from `config.yaml` for a single run.
   * `--log-path <path>` — override `log_path` from `config.yaml` for a single run; the destination folder is created automatically if it doesn't exist.
+  * `--local` — treat Leaf folders as sitting directly under `root_dir` (flat `root_dir/Leaf` layout) instead of the standard `root_dir/Parent1/Parent2/Leaf` hierarchy. Affects Steps 1 through 6 and Step 8's final move. Step 7 (CSV Operations) is automatically skipped in this mode, since it relies on the Parent1/Parent2 hierarchy — use `--skip-step 7` explicitly, or leave it enabled and it will simply no-op.
   * `--skip-step <steps>` — bypass one or more stages for this run without editing `config.yaml`. Accepts any of `1 2 3 4 5 5.1 6 7 8` (the `5.1` sub-step, hash-suffix cleanup, can be skipped independently of `5`). Multiple values can be combined: `python main.py --skip-step 2 5.1 6`.
   * `python main.py --help` for the full option list.
 * On startup, `config.yaml` is validated: missing keys or values of the wrong type stop the run immediately with a clear error message instead of failing mid-workflow.
@@ -97,8 +108,8 @@ python main.py
 5. **Leaf Folder Renaming**: Regex-based, conflict-proof renaming of chapter folders using the first matching rule in `rename_regex`.
    * **5.1 — Hash Suffix Cleaning**: Automatically strips trailing hashes (e.g., `_a1b2c3d4`) from folder names. Runs by default whenever step 5 is active, but can be disabled independently.
 6. **Compression**: Parallelized compression of chapter folders into `[Chapter].cbz`, with archive validation and a bounded worker pool to limit disk contention. Uses 7-Zip by default, or Python's `zipfile` module as a fallback if 7-Zip isn't available.
-7. **CSV Operations**: Batch rename and merge Parent2 (series) folders based on external CSV mappings (`csv_1_path`, `csv_2_path`).
-8. **Final Move & Cleanup**: Deployment of results to `dest_dir` and final purge of empty source folders.
+7. **CSV Operations**: Batch rename and merge Parent2 (series) folders based on external CSV mappings (`csv_1_path`, `csv_2_path`). Automatically skipped when `--local` is used.
+8. **Final Move & Cleanup**: Deployment of results to `dest_dir` and final purge of empty source folders. With `--local`, Leaf folders are moved directly to `dest_dir` instead of their Parent2 folders.
 
 Each step can be toggled on or off in `config.yaml` under `steps_active`, or skipped for a single run via `--skip-step`.
 
