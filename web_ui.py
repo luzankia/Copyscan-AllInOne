@@ -23,7 +23,7 @@ class ServerThread(threading.Thread):
 
 TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
 
-def start_web_ui(images_list, port, thumb_size, supported_extensions):
+def start_web_ui(images_list, port, thumb_size, supported_extensions, mask_popups=False):
     """Starts the Flask server for manual sorting, merging, and image splitting."""
     app = Flask(__name__, template_folder=str(TEMPLATES_DIR))
     completion_event = threading.Event()
@@ -101,7 +101,7 @@ def start_web_ui(images_list, port, thumb_size, supported_extensions):
                 'serie': serie_dir.name if serie_dir else "Unknown",
                 'site': site_dir.name if site_dir else "Unknown"
             })
-        return render_template('main.html', images=main_images_data, thumb_size=thumb_size)
+        return render_template('main.html', images=main_images_data, thumb_size=thumb_size, mask_popups=mask_popups)
 
     @app.route('/image/<b64_path>')
     def serve_image(b64_path):
@@ -205,7 +205,8 @@ def start_web_ui(images_list, port, thumb_size, supported_extensions):
                 main_b64=main_b64,
                 thumb_size=thumb_size,
                 prev_url=prev_url,
-                next_url=next_url
+                next_url=next_url,
+                mask_popups=mask_popups
             )
         else:
             # Phase 2: Validation of generated merges
@@ -227,7 +228,8 @@ def start_web_ui(images_list, port, thumb_size, supported_extensions):
                 main_b64=main_b64,
                 thumb_size=thumb_size,
                 prev_url=None,
-                next_url=None
+                next_url=None,
+                mask_popups=mask_popups
             )
 
     @app.route('/split/<b64>')
@@ -235,7 +237,7 @@ def start_web_ui(images_list, port, thumb_size, supported_extensions):
         if b64 not in path_map:
             return "Image not found", 404
         return_to = request.args.get('return_to', '')
-        return render_template('split.html', b64=b64, return_to=return_to)
+        return render_template('split.html', b64=b64, return_to=return_to, mask_popups=mask_popups)
 
     @app.route('/api_do_split', methods=['POST'])
     def api_do_split():

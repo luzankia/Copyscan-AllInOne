@@ -32,7 +32,7 @@
         .btn.success { background: #10b981; }
         .btn:hover { opacity: 0.9; }
         
-        /* Petit ajout pour séparer visuellement la navigation du reste des actions */
+        /* Small addition to visually separate navigation from the rest of the actions */
         .nav-separator { width: 2px; height: 30px; background-color: #444; margin: 0 5px; }
     </style>
 </head>
@@ -96,6 +96,16 @@
     </div>
 
     <script>
+        const MASK_POPUPS = {{ 'true' if mask_popups else 'false' }};
+        function confirmAction(msg) {
+            if (MASK_POPUPS) return true;
+            return confirm(msg);
+        }
+        function alertMsg(msg) {
+            if (MASK_POPUPS) { console.log(msg); return; }
+            alert(msg);
+        }
+
         let selected = [];
         let rejected = [];
 
@@ -142,12 +152,12 @@
 
         function submitSelection(action) {
             if (selected.length === 0) {
-                alert("Please select at least one image.");
+                alertMsg("Please select at least one image.");
                 return;
             }
 
             if (action === 'delete') {
-                if (!confirm("Warning! Do you really want to permanently DELETE the selected images?")) return;
+                if (!confirmAction("Warning! Do you really want to permanently DELETE the selected images?")) return;
                 fetch('/edit_delete', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
@@ -162,7 +172,7 @@
                     body: JSON.stringify({selected: selected, main_b64: '{{ main_b64 }}'})
                 }).then(res => res.json()).then(data => {
                     if (data.status === 'ok') window.location.reload();
-                    else alert("Error: " + data.message);
+                    else alertMsg("Error: " + data.message);
                 });
             }
         }
@@ -176,7 +186,7 @@
                 if (data.status === 'ok') {
                     window.location.href = '/edit/{{ main_b64 }}';
                 } else {
-                    alert("Error: " + data.message);
+                    alertMsg("Error: " + data.message);
                 }
             });
         }

@@ -52,6 +52,16 @@
     </div>
 
     <script>
+        const MASK_POPUPS = {{ 'true' if mask_popups else 'false' }};
+        function confirmAction(msg) {
+            if (MASK_POPUPS) return true;
+            return confirm(msg);
+        }
+        function alertMsg(msg) {
+            if (MASK_POPUPS) { console.log(msg); return; }
+            alert(msg);
+        }
+
         let currentZoom = 100; // Reference percentage
         let mode = 'h'; // 'h' or 'v'
         let cutsH = []; // Store percentages for responsive cutting
@@ -111,11 +121,11 @@
 
         function submitSplit() {
             if (cutsH.length === 0 && cutsV.length === 0) {
-                alert("Please place at least one marker.");
+                alertMsg("Please place at least one marker.");
                 return;
             }
 
-            if (!confirm("This will divide the image and sequentially renumber the entire folder. Proceed?")) return;
+            if (!confirmAction("This will divide the image and sequentially renumber the entire folder. Proceed?")) return;
 
             fetch('/api_do_split', {
                 method: 'POST',
@@ -129,7 +139,7 @@
                 if (data.status === 'ok') {
                     goBack();
                 } else {
-                    alert("Error: " + data.message);
+                    alertMsg("Error: " + data.message);
                 }
             });
         }

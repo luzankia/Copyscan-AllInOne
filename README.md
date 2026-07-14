@@ -15,9 +15,14 @@
     * Permanently delete individual pages.
     * **Vertically merge consecutive images** (useful when a hosting site does an unwanted horizontal cut), with a dedicated validation step to accept or reject each generated merge before it's finalized.
     * **Split a single image** into multiple pages via an interactive cutting tool (horizontal/vertical markers, zoom), with automatic, conflict-free renumbering of the whole folder afterward.
+    * **Prev/Next Chapter navigation**: jump directly to the previous or next chapter without going back to the main gallery first.
   * One-tab navigation: moving between the main gallery, a chapter editor, and the split studio reuses the same tab and reloads with up-to-date data every time — no stale thumbnails, no manual refresh.
+  * **Optional popup masking**: confirmation dialogs and alerts in the Web UI can be silently auto-accepted via `mask_security_popups` in `config.yaml`, for a faster, uninterrupted review pass.
   * Responsive CSS tooltips and dynamic thumbnails.
 * **External tools integration**: [ImageMagick](https://imagemagick.org/) (for integrity checks) and [7-Zip](https://www.7-zip.org/) (for compression).
+  * If ImageMagick is missing, the CLI offers to skip the integrity check step for the current run instead of hard-failing.
+  * If 7-Zip is missing, the CLI offers to fall back to Python's built-in `zipfile` module for compression (7-Zip remains the preferred, faster option when available).
+* **Flexible logging**: log file location can be overridden per run via `--log-path`, disabled entirely via `log_enabled: false` in `config.yaml`, and the destination folder is created automatically if it doesn't exist.
 * **Safe, no-data-loss logic**: Suffix-safe renaming and non-destructive operations.
 
 ---
@@ -70,24 +75,28 @@ python main.py
 
 * **CLI Overrides**:
   * `--root-dir <path>` / `--dest-dir <path>` — override `root_dir` / `dest_dir` from `config.yaml` for a single run.
+  * `--log-path <path>` — override `log_path` from `config.yaml` for a single run; the destination folder is created automatically if it doesn't exist.
   * `--skip-step <steps>` — bypass one or more stages for this run without editing `config.yaml`. Accepts any of `1 2 3 4 5 5.1 6 7 8` (the `5.1` sub-step, hash-suffix cleanup, can be skipped independently of `5`). Multiple values can be combined: `python main.py --skip-step 2 5.1 6`.
   * `python main.py --help` for the full option list.
 * On startup, `config.yaml` is validated: missing keys or values of the wrong type stop the run immediately with a clear error message instead of failing mid-workflow.
+* If `step_1` is active and ImageMagick can't be found, the CLI asks whether to skip Step 1 for this run rather than aborting outright. If Step 1 is disabled (in `config.yaml` or via `--skip-step 1`), ImageMagick isn't checked at all.
+* If neither `7z` nor `7za` can be found, the CLI asks whether to fall back to Python's `zipfile` module for Step 6 instead of aborting.
 * At the end of a successful run, the console pauses on `Press ENTER to close this window...` so the summary stays visible when launched by double-click.
 
 ---
 
 ## Workflow Steps Overview
 
-1. **Integrity Check**: Strict validation of images using `magick identify -verbose`, run in parallel across files.
+1. **Integrity Check**: Strict validation of images using `magick identify -verbose`, run in parallel across files. Skipped entirely (no ImageMagick lookup) if `step_1` is disabled.
 2. **Manual Sort & Edit (Web UI)**: A local Flask server (`127.0.0.1` only) opens in your browser for:
    * Global review — flag first pages for deletion across all chapters at once.
-   * Per-chapter editing — for any chapter, delete pages, merge consecutive images vertically (with a review/undo step before finalizing), or split one image into several with an interactive marker-based tool.
+   * Per-chapter editing — for any chapter, delete pages, merge consecutive images vertically (with a review/undo step before finalizing), split one image into several with an interactive marker-based tool, or jump to the previous/next chapter directly.
+   * Confirmation popups and alerts can be auto-accepted via `mask_security_popups` for a faster review pass.
 3. **Regex Cleanup**: Automated deletion of files matching patterns in `delete_regex` (e.g., stray `.nomedia` files).
 4. **Empty Folder Pruning**: Recursive cleanup of empty directory structures.
 5. **Leaf Folder Renaming**: Regex-based, conflict-proof renaming of chapter folders using the first matching rule in `rename_regex`.
    * **5.1 — Hash Suffix Cleaning**: Automatically strips trailing hashes (e.g., `_a1b2c3d4`) from folder names. Runs by default whenever step 5 is active, but can be disabled independently.
-6. **Compression**: Parallelized compression of chapter folders into `[Chapter].cbz`, with archive validation and a bounded worker pool to limit disk contention.
+6. **Compression**: Parallelized compression of chapter folders into `[Chapter].cbz`, with archive validation and a bounded worker pool to limit disk contention. Uses 7-Zip by default, or Python's `zipfile` module as a fallback if 7-Zip isn't available.
 7. **CSV Operations**: Batch rename and merge Parent2 (series) folders based on external CSV mappings (`csv_1_path`, `csv_2_path`).
 8. **Final Move & Cleanup**: Deployment of results to `dest_dir` and final purge of empty source folders.
 
@@ -106,6 +115,7 @@ dest_dir: "C:\\Path\\To\\Your\\Output"
 csv_1_path: "C:\\Path\\To\\Your\\Project\\exception.txt"
 csv_2_path: "C:\\Path\\To\\Your\\Project\\batchexception.txt"
 log_path: "C:\\Path\\To\\Your\\Project\\workflow.log"
+log_enabled: true   # Set to false to disable the log file entirely
 
 # Supported file extensions
 supported_extensions:
@@ -135,6 +145,9 @@ steps_active:
   step_7: true
   step_8: true
 
+# Security Configurations
+mask_security_popups: false  # true = auto-accept every confirm/alert popup in the Web UI
+
 # Files to delete outright (step 3)
 delete_regex:
   - '^\.nomedia$'
@@ -150,12 +163,12 @@ rename_regex:
 
 ## Troubleshooting
 
-* **Missing Binaries**: The CLI will alert you if `magick` or `7z` are not found in your PATH.
+* **Missing Binaries**: If `magick` isn't found and `step_1` is active, the CLI offers to skip Step 1 for this run. If neither `7z` nor `7za` is found, it offers to fall back to Python's `zipfile` module for compression. Declining either prompt aborts the run with the list of missing tools.
 * **Invalid or incomplete `config.yaml`**: The script exits immediately with the list of missing/mistyped keys — check against `config.example.yaml`.
 * **AVIF Issues**: Verify that your ImageMagick installation includes `libavif` support if Step 1 fails on valid files.
 * **Locked Files**: Ensure no external programs (viewers, file explorers) are locking your directories during the workflow.
 * **Web UI unreachable**: The server only binds to `127.0.0.1:<web_port>` — it's local-only by design and won't be reachable from other devices.
-* **Logging**: Every operation is logged in the path specified by `log_path` in `config.yaml` (UTF-8 encoded).
+* **Logging**: Every operation is logged in the path specified by `log_path` in `config.yaml` (UTF-8 encoded), unless `log_enabled` is set to `false`. The destination folder is created automatically if missing; use `--log-path` to override the location for a single run.
 
 ---
 
@@ -164,3 +177,4 @@ rename_regex:
 * All operations are **non-destructive** by default logic: suffix-safe renaming resolves naming conflicts, and the destination folder is never automatically cleaned by the tool.
 * The Web UI server is bound to `127.0.0.1` only and is never exposed to the network.
 * `config.yaml` is excluded from version control (see `.gitignore`); only `config.example.yaml`, with placeholder paths, is tracked.
+* `mask_security_popups: true` auto-accepts every confirmation dialog in the Web UI (including destructive actions like deletions and splits) — only enable it once you trust your review workflow, since it removes the "are you sure?" safety net.

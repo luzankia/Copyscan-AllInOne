@@ -6,6 +6,7 @@ import os
 import logging
 import shutil
 import webbrowser
+import zipfile
 from pathlib import Path
 from rich.progress import Progress
 from rich.prompt import Prompt
@@ -115,7 +116,8 @@ def step_2_web_ui(config):
 
     console.print(f"[cyan]Step 2: Starting Web Server[/cyan]")
 
-    server_thread, completion_event = start_web_ui(first_images, port, config['thumb_size'], exts)
+    mask_popups = config.get('mask_security_popups', False)
+    server_thread, completion_event = start_web_ui(first_images, port, config['thumb_size'], exts, mask_popups)
     
     url = f"http://127.0.0.1:{port}"
     webbrowser.open(url)
@@ -243,33 +245,53 @@ def step_6_compress(config):
     errors = []
     
     leafs = list(get_leaf_dirs(root_dir))
+    use_zipfile_fallback = config.get('use_zipfile_fallback', False)
     executable = "7za" if shutil.which("7za") else "7z"
-    
+
+    def compress_with_zipfile(leaf, archive_path):
+        """Fallback compressor using Python's built-in zipfile module (no 7-Zip required)."""
+        with zipfile.ZipFile(archive_path, 'w', zipfile.ZIP_DEFLATED) as zf:
+            for file in leaf.rglob('*'):
+                if file.is_file():
+                    zf.write(file, arcname=file.relative_to(leaf))
+
+        # Integrity test: testzip() returns the name of the first bad file, or None if all is well
+        with zipfile.ZipFile(archive_path, 'r') as zf:
+            bad_file = zf.testzip()
+            if bad_file is not None:
+                raise RuntimeError(f"Corrupted entry in archive: {bad_file}")
+
+    def compress_with_7z(leaf, archive_path):
+        """Preferred compressor: 7-Zip via subprocess."""
+        # Note: we force 7z to only use 2 threads.
+        # To avoid a single archive from consuming all CPU cores.
+        cmd_add = [executable, "a", "-tzip", "-r", "-mmt=2", str(archive_path), str(leaf) + os.sep]
+        res_add = subprocess.run(cmd_add, capture_output=True)
+        if res_add.returncode != 0:
+            logging.error(f"7z compress stderr: {res_add.stderr.decode(errors='replace')}")
+            raise RuntimeError(f"Compression failed: {leaf}")
+
+        cmd_test = [executable, "t", str(archive_path)]
+        res_test = subprocess.run(cmd_test, capture_output=True)
+        if res_test.returncode != 0:
+            logging.error(f"7z test stderr: {res_test.stderr.decode(errors='replace')}")
+            raise RuntimeError(f"Test failed for archive: {archive_path}")
+
     # Function for compressing a single Leaf folder
     def compress_single_leaf(leaf):
         archive_path = leaf.parent / f"{leaf.name}.cbz"
         archive_path = resolve_conflict(archive_path, is_file=True)
         
         try:
-            # Note : we force 7z to only use 2 threads.
-            # To avoid a single archive from consuming all CPU cores.
-            cmd_add = [executable, "a", "-tzip", "-r", "-mmt=2", str(archive_path), str(leaf) + os.sep]
-            res_add = subprocess.run(cmd_add, capture_output=True)
-            if res_add.returncode != 0:
-                logging.error(f"7z compress stderr: {res_add.stderr.decode(errors='replace')}")
-                return f"Compression failed: {leaf}"
-            
-            # Test
-            cmd_test = [executable, "t", str(archive_path)]
-            res_test = subprocess.run(cmd_test, capture_output=True)
-            if res_test.returncode == 0:
-                shutil.rmtree(leaf)
-                logging.info(f"Compressed and removed: {leaf}")
+            if use_zipfile_fallback:
+                compress_with_zipfile(leaf, archive_path)
             else:
-                logging.error(f"7z test stderr: {res_test.stderr.decode(errors='replace')}")
-                return f"Test failed for archive: {archive_path}"
+                compress_with_7z(leaf, archive_path)
+
+            shutil.rmtree(leaf)
+            logging.info(f"Compressed and removed: {leaf}")
         except Exception as e:
-            return f"7z Error on {leaf}: {e}"
+            return f"Compression error on {leaf}: {e}"
         return None
 
     with Progress() as progress:

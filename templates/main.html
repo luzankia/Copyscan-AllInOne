@@ -49,6 +49,16 @@
     </div>
 
     <script>
+        const MASK_POPUPS = {{ 'true' if mask_popups else 'false' }};
+        function confirmAction(msg) {
+            if (MASK_POPUPS) return true;
+            return confirm(msg);
+        }
+        function alertMsg(msg) {
+            if (MASK_POPUPS) { console.log(msg); return; }
+            alert(msg);
+        }
+
         let toDelete = [];
 
         function toggleSelect(b64) {
@@ -68,9 +78,9 @@
 
         function submitSelection() {
             if (toDelete.length === 0) {
-                if (!confirm("No images selected for global deletion. Proceed to next step?")) return;
+                if (!confirmAction("No images selected for global deletion. Proceed to next step?")) return;
             } else {
-                if (!confirm("Are you sure you want to permanently delete the " + toDelete.length + " selected item(s)?")) return;
+                if (!confirmAction("Are you sure you want to permanently delete the " + toDelete.length + " selected item(s)?")) return;
             }
 
             fetch('/validate', {

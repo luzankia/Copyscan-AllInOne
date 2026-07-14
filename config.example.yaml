@@ -1,11 +1,11 @@
 # Global Configuration
 # Copy this file to "config.yaml" and adjust every path below to your own setup.
-# config.yaml is gitignored on purpose: it will contain paths specific to your machine.
 root_dir: "C:\\Path\\To\\Your\\Input"
 dest_dir: "C:\\Path\\To\\Your\\Output"
 csv_1_path: "C:\\Path\\To\\Your\\Project\\exception.txt"
 csv_2_path: "C:\\Path\\To\\Your\\Project\\batchexception.txt"
 log_path: "C:\\Path\\To\\Your\\Project\\workflow.log"
+log_enabled: true
 
 # Supported extension in the workflow
 supported_extensions:

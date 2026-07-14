@@ -7,22 +7,24 @@ from pathlib import Path
 from utils import setup_environment, check_prerequisites, console
 import workflow
 
-# Étapes valides pouvant être passées à --skip-step (inclut la sous-étape 5.1)
+# Valid step tokens accepted by --skip-step (includes sub-step 5.1)
 VALID_STEP_TOKENS = ["1", "2", "3", "4", "5", "5.1", "6", "7", "8"]
 
-# Clés obligatoires attendues dans config.yaml, avec leur type Python attendu
+# Required keys expected in config.yaml, with their expected Python type
 REQUIRED_CONFIG_KEYS = {
     "root_dir": str,
     "dest_dir": str,
     "csv_1_path": str,
     "csv_2_path": str,
     "log_path": str,
+    "log_enabled": bool,
     "supported_extensions": list,
     "sleep_time": (int, float),
     "im_timeout": (int, float),
     "web_port": int,
     "thumb_size": str,
     "steps_active": dict,
+    "mask_security_popups": bool,
     "delete_regex": list,
     "rename_regex": list,
 }
@@ -43,7 +45,7 @@ def load_config(config_path="config.yaml"):
     return config
 
 def validate_config(config, config_path):
-    """Vérifie que toutes les clés requises sont présentes et correctement typées."""
+    """Check that all required keys are present and correctly typed."""
     if not isinstance(config, dict):
         console.print(f"[bold red]Invalid config: {config_path} does not contain a valid YAML mapping.[/bold red]")
         sys.exit(1)
@@ -66,6 +68,7 @@ def parse_cli_args(config):
     parser = argparse.ArgumentParser(description="Image Processing Workflow CLI")
     parser.add_argument("--root-dir", type=str, help="Override root_dir")
     parser.add_argument("--dest-dir", type=str, help="Override dest_dir")
+    parser.add_argument("--log-path", type=str, help="Override log_path (log file destination)")
     parser.add_argument(
         "--skip-step",
         type=str,
@@ -78,6 +81,7 @@ def parse_cli_args(config):
 
     if args.root_dir: config['root_dir'] = args.root_dir
     if args.dest_dir: config['dest_dir'] = args.dest_dir
+    if args.log_path: config['log_path'] = args.log_path
 
     invalid = [s for s in args.skip_step if s not in VALID_STEP_TOKENS]
     if invalid:
@@ -87,9 +91,9 @@ def parse_cli_args(config):
 
     for step in args.skip_step:
         step_key = f"step_{step.replace('.', '_')}"
-        # step_5_1 peut être absent de steps_active si non défini explicitement
-        # dans config.yaml : on l'ajoute quand même pour que --skip-step 5.1
-        # soit toujours respecté par execute_workflow.
+        # step_5_1 may be absent from steps_active if not explicitly defined
+        # in config.yaml: we add it anyway so --skip-step 5.1 is always
+        # honored by execute_workflow.
         config['steps_active'][step_key] = False
 
     return config
@@ -109,15 +113,15 @@ def execute_workflow(config):
 
     console.print("[bold magenta]=== Starting Image Processing Workflow ===[/bold magenta]")
     
-    # On définit explicitement la liste ordonnée des clés d'étapes à exécuter
+    # Explicit ordered list of step keys to execute
     ordered_steps = [
         'step_1', 'step_2', 'step_3', 'step_4', 
         'step_5', 'step_5_1', 'step_6', 'step_7', 'step_8'
     ]
     
     for step_key in ordered_steps:
-        # Par défaut, si l'étape 5.1 n'est pas mentionnée dans config.yaml, 
-        # on s'aligne sur le statut d'activation de la step_5 générale
+        # By default, if step 5.1 is not mentioned in config.yaml,
+        # align it with the general step_5 activation status
         is_active = config['steps_active'].get(
             step_key, 
             config['steps_active'].get('step_5', True) if step_key == 'step_5_1' else False
@@ -134,29 +138,29 @@ def execute_workflow(config):
             console.print("[bold red]Workflow aborted by user.[/bold red]")
             sys.exit(0)
             
-        # Post-step successful sleep (sauf pour l'interface web)
+        # Post-step successful sleep (except for the web interface)
         if step_key != 'step_2':
             sleep_t = config['sleep_time']
             console.print(f"[dim]Pausing for {sleep_t} seconds...[/dim]")
             time.sleep(sleep_t)
 
 if __name__ == "__main__":
-    # 1. Chargement de la configuration initiale
+    # 1. Load initial configuration
     config = load_config("config.yaml")
     
-    # 2. Application des arguments de la ligne de commande si présents
+    # 2. Apply command line arguments if present
     config = parse_cli_args(config)
     
-    # 3. Initialisation de l'environnement (Logs, encodage)
-    setup_environment(config['log_path'])
+    # 3. Initialize the environment (logging, encoding)
+    setup_environment(config['log_path'], config['log_enabled'])
     
-    # 4. Vérification des prérequis système (ImageMagick, 7-Zip)
-    check_prerequisites()
+    # 4. Check system prerequisites (ImageMagick, 7-Zip)
+    check_prerequisites(config)
     
-    # 5. Lancement du workflow
+    # 5. Run the workflow
     execute_workflow(config)
 
-    # 6. PAUSE FINALE (Ajout ici)
+    # 6. FINAL PAUSE
     console.print("\n[bold magenta]===================================================[/bold magenta]")
     console.print("[bold green]✓ The workflow has been completed successfully![/bold green]")
     console.print("[dim]Press ENTER to close this window...[/dim]")

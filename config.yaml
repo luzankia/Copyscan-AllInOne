@@ -1,9 +1,11 @@
 # Global Configuration
+# Copy this file to "config.yaml" and adjust every path below to your own setup.
 root_dir: "C:\\AndroidDL\\downloads"
 dest_dir: "Z:\\Telecharge"
 csv_1_path: "Z:\\Script\\AllInOne\\exception.txt"
 csv_2_path: "Z:\\Script\\AllInOne\\batchexception.txt"
 log_path: "C:\\AndroidDL\\workflow.log"
+log_enabled: false
 
 # Supported extension in the workflow
 supported_extensions:
