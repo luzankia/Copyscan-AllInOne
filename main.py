@@ -8,7 +8,7 @@ from utils import setup_environment, check_prerequisites, console
 import workflow
 
 # Valid step tokens accepted by --skip-step (includes sub-step 5.1)
-VALID_STEP_TOKENS = ["1", "2", "3", "4", "5", "5.1", "6", "7", "8"]
+VALID_STEP_TOKENS = ["1", "2", "3", "4", "5", "5.1", "6", "7", "8", "9"]
 
 # Required keys expected in config.yaml, with their expected Python type
 REQUIRED_CONFIG_KEYS = {
@@ -79,7 +79,7 @@ def parse_cli_args(config):
         "--skip-step",
         type=str,
         nargs='+',
-        help="Steps to skip, e.g. '2 5.1 6' (valid values: 1, 2, 3, 4, 5, 5.1, 6, 7, 8)",
+        help="Steps to skip, e.g. '2 5.1 6' (valid values: 1, 2, 3, 4, 5, 5.1, 6, 7, 8, 9)",
         default=[]
     )
 
@@ -113,9 +113,10 @@ def execute_workflow(config):
         'step_4': workflow.step_4_delete_empty,
         'step_5': workflow.step_5_rename_leaf,
         'step_5_1': workflow.step_5_1_clean_hash_suffix,
-        'step_6': workflow.step_6_compress,
-        'step_7': workflow.step_7_csv_rename,
-        'step_8': workflow.step_8_final_move
+        'step_6': workflow.step_6_renumber_leaf,
+        'step_7': workflow.step_7_compress,
+        'step_8': workflow.step_8_csv_rename,
+        'step_9': workflow.step_9_final_move
     }
 
     console.print("[bold magenta]=== Starting Image Processing Workflow ===[/bold magenta]")
@@ -123,7 +124,7 @@ def execute_workflow(config):
     # Explicit ordered list of step keys to execute
     ordered_steps = [
         'step_1', 'step_2', 'step_3', 'step_4', 
-        'step_5', 'step_5_1', 'step_6', 'step_7', 'step_8'
+        'step_5', 'step_5_1', 'step_6', 'step_7', 'step_8', 'step_9'
     ]
     
     for step_key in ordered_steps:

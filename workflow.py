@@ -245,7 +245,86 @@ def step_5_1_clean_hash_suffix(config):
             
     return handle_step_error(errors, "Step 5.1 (Clean Hash Suffix)")
 
-def step_6_compress(config):
+def step_6_renumber_leaf(config):
+    root_dir = Path(config['root_dir'])
+    exts = set(config['supported_extensions'])
+    local_mode = config.get('local_mode', False)
+    errors = []
+
+    leafs = list(get_leaf_dirs(root_dir, local_mode))
+    numeric_pattern = re.compile(r'^(\d+)$')
+
+    with Progress() as progress:
+        task = progress.add_task("[cyan]Step 6: Renumbering Leaf folder files...", total=len(leafs))
+        for leaf in leafs:
+            # Collect files whose stem is purely numeric (e.g. "002"), ignoring
+            # anything else (non-image files, already-named chapters, etc.).
+            numbered_files = []
+            for f in leaf.iterdir():
+                if f.is_file() and f.suffix.lower() in exts:
+                    match = numeric_pattern.match(f.stem)
+                    if match:
+                        numbered_files.append((int(match.group(1)), f))
+
+            if not numbered_files:
+                progress.advance(task)
+                continue
+
+            # Sort by current numeric value (ties broken by filename) to
+            # preserve reading order regardless of any existing gaps.
+            numbered_files.sort(key=lambda item: (item[0], item[1].name))
+
+            expected_sequence = list(range(1, len(numbered_files) + 1))
+            current_sequence = [num for num, _ in numbered_files]
+
+            if current_sequence == expected_sequence:
+                # Already contiguous starting at 1: nothing to realign.
+                progress.advance(task)
+                continue
+
+            # Preserve the widest zero-padding found among the folder's files
+            # so e.g. "002" -> "001" keeps 3 digits, not "1".
+            width = max(len(f.stem) for _, f in numbered_files)
+
+            # Phase 1: move every numbered file to a unique temporary name.
+            # This avoids collisions when a target number is already taken
+            # by another file in the folder mid-renumbering.
+            temp_entries = []
+            phase1_failed = False
+            for num, f in numbered_files:
+                temp_path = f.with_name(f"{f.stem}.__renumber_tmp__{f.suffix}")
+                temp_path = resolve_conflict(temp_path, is_file=True)
+                try:
+                    f.rename(temp_path)
+                    temp_entries.append(temp_path)
+                except Exception as e:
+                    errors.append(f"Renumber (temp phase) failed for {f}: {e}")
+                    logging.error(f"Renumber temp phase failed for {f}: {e}")
+                    phase1_failed = True
+
+            if phase1_failed:
+                progress.advance(task)
+                continue
+
+            # Phase 2: rename the temporary files to their final, gap-free
+            # numbering, in the same order they were collected.
+            for idx, temp_path in enumerate(temp_entries, start=1):
+                new_name = f"{str(idx).zfill(width)}{temp_path.suffix}"
+                new_path = temp_path.parent / new_name
+                if new_path.exists():
+                    new_path = resolve_conflict(new_path, is_file=True)
+                try:
+                    temp_path.rename(new_path)
+                    logging.info(f"Renumbered: {temp_path.name} -> {new_path.name} in {leaf}")
+                except Exception as e:
+                    errors.append(f"Renumber (final phase) failed for {temp_path}: {e}")
+                    logging.error(f"Renumber final phase failed for {temp_path}: {e}")
+
+            progress.advance(task)
+
+    return handle_step_error(errors, "Step 6 (Renumber Leaf Files)")
+
+def step_7_compress(config):
     root_dir = Path(config['root_dir'])
     local_mode = config.get('local_mode', False)
     errors = []
@@ -301,7 +380,7 @@ def step_6_compress(config):
         return None
 
     with Progress() as progress:
-        task = progress.add_task("[cyan]Step 6: Compressing Leaf folders (Parallel)...", total=len(leafs))
+        task = progress.add_task("[cyan]Step 7: Compressing Leaf folders (Parallel)...", total=len(leafs))
         
         # We limit the number of concurrent threads to a reasonable amount (e.g., 4 folders at a time)
         # to avoid overwhelming the disk with simultaneous write operations.
@@ -315,9 +394,9 @@ def step_6_compress(config):
                     errors.append(result)
                 progress.advance(task)
             
-    return handle_step_error(errors, "Step 6 (Compression)")
+    return handle_step_error(errors, "Step 7 (Compression)")
 
-def step_7_csv_rename(config):
+def step_8_csv_rename(config):
     root_dir = Path(config['root_dir'])
     csv_1 = Path(config['csv_1_path'])
     csv_2 = Path(config['csv_2_path'])
@@ -326,10 +405,10 @@ def step_7_csv_rename(config):
     if config.get('local_mode', False):
         # Step 7 relies on the root_dir/Parent1/Parent2 hierarchy, which doesn't
         # exist in local mode (Leaf folders sit directly under root_dir).
-        console.print("[blue]Step 7: Skipped (incompatible with --local, no Parent1/Parent2 hierarchy).[/blue]")
+        console.print("[blue]Step 8: Skipped (incompatible with --local, no Parent1/Parent2 hierarchy).[/blue]")
         return "next"
 
-    # Step 7.1: Rename
+    # Step 8.1: Rename
     if csv_1.exists():
         with open(csv_1, 'r', encoding='utf-8') as f:
             reader = csv.reader(f, delimiter=';')
@@ -342,7 +421,7 @@ def step_7_csv_rename(config):
                     if src_dir.exists():
                         merge_directories(src_dir, dest_dir, errors)
 
-    # Step 7.2: Suffix
+    # Step 8.2: Suffix
     if csv_2.exists():
         with open(csv_2, 'r', encoding='utf-8') as f:
             reader = csv.reader(f, delimiter=';')
@@ -356,9 +435,9 @@ def step_7_csv_rename(config):
                                 dest_dir = p1_dir / f"{p2.name} {suffix}"
                                 merge_directories(p2, dest_dir, errors)
 
-    return handle_step_error(errors, "Step 7 (CSV Operations)")
+    return handle_step_error(errors, "Step 8 (CSV Operations)")
 
-def step_8_final_move(config):
+def step_9_final_move(config):
     root_dir = Path(config['root_dir'])
     dest_dir = Path(config['dest_dir'])
     local_mode = config.get('local_mode', False)
@@ -373,7 +452,7 @@ def step_8_final_move(config):
         items_to_move = list(get_parent2_dirs(root_dir))
     
     with Progress() as progress:
-        task = progress.add_task("[cyan]Step 8: Moving and final cleanup...", total=len(items_to_move))
+        task = progress.add_task("[cyan]Step 9: Moving and final cleanup...", total=len(items_to_move))
         
         # Move Phase
         if local_mode:
@@ -399,4 +478,4 @@ def step_8_final_move(config):
             logging.warning(f"Cleanup: could not remove {dirpath}: {e}")
             pass  # Silent ignore for cleanup
             
-    return handle_step_error(errors, "Step 8 (Final Move)")
+    return handle_step_error(errors, "Step 9 (Final Move)")

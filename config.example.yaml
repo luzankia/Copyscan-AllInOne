@@ -30,9 +30,10 @@ steps_active:
   step_3: true  # Cleanup via Regex (Files)
   step_4: true  # Delete Empty Folders
   step_5: true  # Rename Leaf Folders (Regex)
-  step_6: true  # Compress Leaf Folders to CBZ (7-Zip)
-  step_7: true  # Rename/Suffix Parent2 via CSV
-  step_8: true  # Move to destination & Final Cleanup
+  step_6: true  # Renumber Leaf Folder Files (fill numbering gaps)
+  step_7: true  # Compress Leaf Folders to CBZ (7-Zip)
+  step_8: true  # Rename/Suffix Parent2 via CSV
+  step_9: true  # Move to destination & Final Cleanup
 
 # Security Configurations
 mask_security_popups: false
