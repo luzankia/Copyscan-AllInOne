@@ -12,6 +12,8 @@
         .card.selected { border-color: #ef4444; box-shadow: 0 0 12px #ef4444; }
         .card-label { padding: 6px; font-size: 11px; background: #1a1a1a; color: #aaa; word-break: break-all; border-bottom-left-radius: 4px; border-bottom-right-radius: 4px; }
 
+        .credit-tag { position: absolute; top: 6px; left: 6px; background: #f59e0b; color: #1a1a1a; padding: 3px 7px; border-radius: 4px; font-size: 11px; font-weight: bold; z-index: 10; }
+
         img { width: 100%; height: auto; max-height: 400px; display: block; object-fit: contain; border-top-left-radius: 4px; border-top-right-radius: 4px; }
 
         .edit-icon { position: absolute; top: 6px; right: 6px; background: rgba(0, 0, 0, 0.8); padding: 5px; border-radius: 5px; cursor: pointer; z-index: 10; color: #fff; font-size: 16px; transition: 0.2s; border: 1px solid #444; line-height: 1; }
@@ -30,13 +32,17 @@
             <h2 style="margin:0;">Manual Sort & Advanced Editing</h2>
             <p style="margin:5px 0 0 0; color:#aaa;">Select images to discard, or click ✏️ to open the leaf folder in the merge/split/delete tool.</p>
         </div>
-        <button class="btn" onclick="submitSelection()">Validate & Delete Selection</button>
+        <div class="actions" style="display:flex; gap:10px;">
+            <button class="btn" onclick="submitSelection()">Validate & Delete Selection</button>
+            <button class="btn" style="background:#f59e0b; color:#1a1a1a;" onclick="markAsCredit()">🧠 Delete &amp; Remember as Credit</button>
+        </div>
     </div>
 
     <div class="gallery">
         {% for item in images %}
-            <div class="card" id="card-{{ item.b64 }}" onclick="toggleSelect('{{ item.b64 }}')">
+            <div class="card {{ 'selected' if item.is_credit_match else '' }}" id="card-{{ item.b64 }}" data-credit="{{ 'true' if item.is_credit_match else 'false' }}" onclick="toggleSelect('{{ item.b64 }}')">
                 <div class="edit-icon" onclick="openEditor(event, '{{ item.b64 }}')" title="Open leaf folder manager">✏️</div>
+                {% if item.is_credit_match %}<div class="credit-tag" title="Matches a known credit page">Known credit</div>{% endif %}
                 <img src="/image/{{ item.b64 }}" loading="lazy" />
                 <div class="card-label">Leaf Preview</div>
                 <div class="tooltip">
@@ -61,6 +67,12 @@
 
         let toDelete = [];
 
+        // Pre-select cards already flagged as matching a known credit page,
+        // so the user just has to validate (or deselect if it's a false positive).
+        document.querySelectorAll('.card[data-credit="true"]').forEach(card => {
+            toDelete.push(card.id.replace('card-', ''));
+        });
+
         function toggleSelect(b64) {
             const el = document.getElementById('card-' + b64);
             el.classList.toggle('selected');
@@ -74,6 +86,23 @@
         function openEditor(event, b64) {
             event.stopPropagation();
             window.location.href = '/edit/' + b64;
+        }
+
+        function markAsCredit() {
+            if (toDelete.length === 0) {
+                alertMsg("Please select at least one image to remember as a credit page.");
+                return;
+            }
+            if (!confirmAction("Delete the " + toDelete.length + " selected item(s) and remember them as known credit pages for future chapters?")) return;
+
+            fetch('/mark_credit', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({selected: toDelete})
+            }).then(res => res.json()).then(data => {
+                if (data.status === 'ok') window.location.reload();
+                else alertMsg("Error while marking credit pages.");
+            });
         }
 
         function submitSelection() {

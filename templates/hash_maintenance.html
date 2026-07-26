@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Credit Hash Maintenance</title>
+    <style>
+        body { font-family: 'Segoe UI', Arial, sans-serif; background: #121212; color: #fff; margin: 0; padding: 20px; }
+        .header { position: sticky; top: 0; background: #1a1a1a; padding: 15px 20px; z-index: 100; border-bottom: 2px solid #333; border-radius: 8px; margin-bottom: 20px; }
+        .header h1 { margin: 0 0 5px 0; font-size: 20px; }
+        .header p { margin: 0; color: #aaa; font-size: 13px; }
+
+        .section { background: #1a1a1a; border-radius: 8px; padding: 20px; margin-bottom: 25px; border: 1px solid #333; }
+        .section h2 { margin-top: 0; font-size: 17px; display: flex; align-items: center; gap: 10px; }
+        .badge { background: #333; color: #ccc; padding: 2px 9px; border-radius: 10px; font-size: 12px; font-weight: normal; }
+        .badge.warn { background: #78350f; color: #fbbf24; }
+
+        table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 13px; }
+        th { text-align: left; color: #999; font-weight: normal; padding: 6px 10px; border-bottom: 1px solid #333; }
+        td { padding: 6px 10px; border-bottom: 1px solid #262626; }
+        tr.cluster-boundary td { border-top: 2px solid #444; }
+        tr.redundant { background: rgba(239, 68, 68, 0.08); }
+        .hash-cell { font-family: 'Consolas', monospace; color: #ddd; }
+        .cluster-tag { color: #f59e0b; font-size: 12px; }
+
+        .btn { background: #ef4444; color: white; padding: 8px 16px; border: none; border-radius: 5px; cursor: pointer; font-size: 13px; font-weight: bold; transition: 0.2s; }
+        .btn:hover { background: #dc2626; }
+        .btn.secondary { background: #3a3a3a; }
+        .btn.secondary:hover { background: #4a4a4a; }
+
+        .actions-row { display: flex; gap: 10px; margin: 12px 0; flex-wrap: wrap; align-items: center; }
+        .empty-msg { color: #777; font-style: italic; padding: 10px 0; }
+        .status-msg { font-size: 13px; margin-left: 8px; }
+
+        .drop-zone { border: 2px dashed #444; border-radius: 8px; padding: 30px; text-align: center; color: #999; cursor: pointer; transition: 0.2s; }
+        .drop-zone:hover, .drop-zone.dragover { border-color: #38bdf8; color: #38bdf8; background: rgba(56, 189, 248, 0.05); }
+        .drop-zone input[type=file] { display: none; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>🗂️ Credit Hash Maintenance</h1>
+        <p>Standalone tool — independent from the main workflow. Review, prune, or seed the known credit-page / credit-banner hash databases.</p>
+    </div>
+
+    <div class="section" id="section-add">
+        <h2>➕ Add a hash from an image</h2>
+        <p style="color:#aaa; font-size:13px; margin-top:-8px;">
+            Upload a reference image (a saved credit page, or a page containing an embedded banner). You'll then choose whether to keep it as-is (whole-page credit) or mark just the top/bottom banner slice — same tool as the main workflow's image splitter.
+        </p>
+        <div class="drop-zone" id="drop-zone" onclick="document.getElementById('ref-file-input').click()">
+            <div id="drop-zone-label">📤 Click to choose an image, or drag and drop it here</div>
+            <input type="file" id="ref-file-input" accept="image/*">
+        </div>
+        <span class="status-msg" id="add-status"></span>
+    </div>
+
+    {% for section in sections %}
+    <div class="section" id="section-{{ section.bucket }}">
+        <h2>
+            {{ section.title }}
+            <span class="badge">{{ section.rows|length }} hash(es)</span>
+            {% if section.redundant_count > 0 %}
+                <span class="badge warn">{{ section.redundant_count }} likely redundant in {{ section.cluster_count }} cluster(s)</span>
+            {% endif %}
+        </h2>
+
+        {% if section.rows %}
+        <div class="actions-row">
+            <button class="btn secondary" onclick="selectRedundant('{{ section.bucket }}')">Select redundant duplicates</button>
+            <button class="btn secondary" onclick="deselectAll('{{ section.bucket }}')">Deselect all</button>
+            <button class="btn" onclick="deleteSelected('{{ section.bucket }}')">Delete Selected</button>
+            <span class="status-msg" id="status-{{ section.bucket }}"></span>
+        </div>
+        <table>
+            <thead>
+                <tr><th></th><th>#</th><th>Hash</th><th>Cluster</th></tr>
+            </thead>
+            <tbody id="tbody-{{ section.bucket }}">
+                {% for row in section.rows %}
+                <tr class="{{ 'cluster-boundary' if row.is_first_in_cluster else '' }} {{ 'redundant' if row.cluster_size > 1 else '' }}">
+                    <td><input type="checkbox" class="row-check" data-bucket="{{ section.bucket }}" data-hash="{{ row.hash }}" data-first-in-cluster="{{ 'true' if row.is_first_in_cluster else 'false' }}"></td>
+                    <td>{{ loop.index }}</td>
+                    <td class="hash-cell">{{ row.hash }}</td>
+                    <td>
+                        {% if row.cluster_size > 1 %}
+                            <span class="cluster-tag">cluster #{{ row.cluster_id }} ({{ row.cluster_size }})</span>
+                        {% else %}
+                            —
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <p class="empty-msg">No hashes stored yet.</p>
+        {% endif %}
+    </div>
+    {% endfor %}
+
+    <script>
+        function selectRedundant(bucket) {
+            document.querySelectorAll(`.row-check[data-bucket="${bucket}"]`).forEach(cb => {
+                cb.checked = cb.dataset.firstInCluster === 'false';
+            });
+        }
+
+        function deselectAll(bucket) {
+            document.querySelectorAll(`.row-check[data-bucket="${bucket}"]`).forEach(cb => cb.checked = false);
+        }
+
+        function deleteSelected(bucket) {
+            const checked = [...document.querySelectorAll(`.row-check[data-bucket="${bucket}"]:checked`)];
+            if (checked.length === 0) {
+                alert('Select at least one hash to delete.');
+                return;
+            }
+            if (!confirm(`Permanently delete ${checked.length} hash(es) from this database? This cannot be undone.`)) return;
+
+            const hashes = checked.map(cb => cb.dataset.hash);
+            fetch('/delete', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ bucket, hashes })
+            }).then(res => res.json()).then(data => {
+                if (data.status === 'ok') {
+                    window.location.reload();
+                } else {
+                    document.getElementById('status-' + bucket).textContent = 'Error: ' + data.message;
+                }
+            });
+        }
+
+        function handleReferenceFile(file) {
+            if (!file) return;
+            const statusEl = document.getElementById('add-status');
+            statusEl.textContent = 'Uploading...';
+
+            const formData = new FormData();
+            formData.append('image', file);
+
+            fetch('/upload_reference', { method: 'POST', body: formData })
+                .then(res => res.json())
+                .then(data => {
+                    if (data.status === 'ok') {
+                        window.location.href = '/learn/' + data.token;
+                    } else {
+                        statusEl.textContent = 'Error: ' + data.message;
+                    }
+                });
+        }
+
+        const dropZone = document.getElementById('drop-zone');
+        const fileInput = document.getElementById('ref-file-input');
+
+        fileInput.addEventListener('change', () => handleReferenceFile(fileInput.files[0]));
+
+        dropZone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            dropZone.classList.add('dragover');
+        });
+        dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+        dropZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropZone.classList.remove('dragover');
+            if (e.dataTransfer.files.length) handleReferenceFile(e.dataTransfer.files[0]);
+        });
+    </script>
+</body>
+</html>

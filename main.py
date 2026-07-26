@@ -27,6 +27,10 @@ REQUIRED_CONFIG_KEYS = {
     "mask_security_popups": bool,
     "delete_regex": list,
     "rename_regex": list,
+    "credit_hashes_path": str,
+    "credit_hash_threshold": int,
+    "credit_banners_path": str,
+    "credit_banner_threshold": int,
 }
 
 def load_config(config_path="config.yaml"):

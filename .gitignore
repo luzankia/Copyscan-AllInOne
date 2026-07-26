@@ -226,3 +226,11 @@ exception.txt
 
 # Use batchexception.txt as model.
 batchexception.txt
+
+# Copyscan-AllInOne: personal credit-page hash database (grows locally over time).
+# Use credit_hashes.example.json as model (an empty list).
+credit_hashes.json
+
+# Copyscan-AllInOne: personal embedded credit-banner hash database (grows locally over time).
+# Use credit_banners.example.json as model.
+credit_banners.json

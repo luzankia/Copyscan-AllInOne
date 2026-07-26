@@ -7,6 +7,11 @@ from flask import Flask, render_template, request, jsonify, send_file
 from werkzeug.serving import make_server
 from PIL import Image
 
+from utils import (
+    load_credit_hashes, save_credit_hashes, compute_phash, is_known_credit_hash,
+    load_credit_banners, save_credit_banners, suggest_banner_cut, crop_remove_banner
+)
+
 class ServerThread(threading.Thread):
     def __init__(self, app, port):
         threading.Thread.__init__(self)
@@ -23,7 +28,9 @@ class ServerThread(threading.Thread):
 
 TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
 
-def start_web_ui(images_list, port, thumb_size, supported_extensions, mask_popups=False):
+def start_web_ui(images_list, port, thumb_size, supported_extensions, mask_popups=False,
+                  credit_hashes_path=None, credit_hash_threshold=8,
+                  credit_banners_path=None, credit_banner_threshold=10):
     """Starts the Flask server for manual sorting, merging, and image splitting."""
     app = Flask(__name__, template_folder=str(TEMPLATES_DIR))
     completion_event = threading.Event()
@@ -31,6 +38,27 @@ def start_web_ui(images_list, port, thumb_size, supported_extensions, mask_popup
     # Shared registries within the server instance
     path_map = {}
     PENDING_MERGES = {} # b64_fusion -> { 'merged_path', 'top_path', 'bottom_path', 'filename', 'leaf_dir' }
+
+    # Known "credit page" perceptual hashes (whole duplicated pages), loaded once
+    # and grown in-memory as the user confirms new ones through the UI (also
+    # persisted to disk immediately).
+    known_credit_hashes = load_credit_hashes(credit_hashes_path) if credit_hashes_path else []
+
+    # Known embedded "credit banner" hashes (top/bottom slices merged into an
+    # otherwise real content page), same learning principle as above.
+    known_banners = load_credit_banners(credit_banners_path) if credit_banners_path else {"top": [], "bottom": []}
+
+    def check_credit_match(file_path):
+        """Returns True if file_path's perceptual hash matches a known credit page."""
+        img_hash = compute_phash(file_path)
+        return is_known_credit_hash(img_hash, known_credit_hashes, credit_hash_threshold)
+
+    def check_banner_suggestion(file_path, position):
+        """Returns a suggested cut percentage (float) if file_path looks like it
+        contains a known embedded credit banner at the given edge, else None."""
+        return suggest_banner_cut(
+            file_path, position, known_banners.get(position, []), credit_banner_threshold
+        )
 
     # We only store leaf folders refrence list. First picture of each leaf folder will be computed on-demand in index().
     # It will always reflect the actual first image of each leaf folder (even after a delete/fuse/split task).
@@ -99,7 +127,8 @@ def start_web_ui(images_list, port, thumb_size, supported_extensions, mask_popup
                 'b64': b64,
                 'chapter': leaf_dir.name,
                 'serie': serie_dir.name if serie_dir else "Unknown",
-                'site': site_dir.name if site_dir else "Unknown"
+                'site': site_dir.name if site_dir else "Unknown",
+                'is_credit_match': check_credit_match(current_first)
             })
         return render_template('main.html', images=main_images_data, thumb_size=thumb_size, mask_popups=mask_popups)
 
@@ -136,6 +165,38 @@ def start_web_ui(images_list, port, thumb_size, supported_extensions, mask_popup
         completion_event.set()
         return jsonify({"status": "ok", "errors": errors})
 
+    @app.route('/mark_credit', methods=['POST'])
+    def mark_credit():
+        """Deletes the selected images and remembers their perceptual hash as a
+        known 'credit page', so future chapters with the same image are
+        pre-flagged for deletion automatically (still requiring user validation)."""
+        data = request.json
+        selected_b64s = data.get('selected', [])
+
+        errors = []
+        learned = 0
+        for b64 in selected_b64s:
+            file_path = path_map.get(b64)
+            if not file_path or not file_path.exists():
+                continue
+
+            img_hash = compute_phash(file_path)
+            if img_hash and not is_known_credit_hash(img_hash, known_credit_hashes, credit_hash_threshold):
+                known_credit_hashes.append(img_hash)
+                learned += 1
+
+            try:
+                file_path.unlink()
+                logging.info(f"Marked as credit page and deleted: {file_path}")
+            except Exception as e:
+                errors.append(str(file_path))
+                logging.error(f"Failed to delete marked credit page {file_path}: {e}")
+
+        if learned and credit_hashes_path:
+            save_credit_hashes(credit_hashes_path, known_credit_hashes)
+
+        return jsonify({"status": "ok", "errors": errors, "learned": learned})
+
     @app.route('/edit/<main_b64>')
     def edit_folder(main_b64):
         main_path = path_map.get(main_b64)
@@ -145,36 +206,37 @@ def start_web_ui(images_list, port, thumb_size, supported_extensions, mask_popup
         leaf_dir = main_path.parent
         serie_dir = leaf_dir.parent
         site_dir = serie_dir.parent if serie_dir else None
-        
+
         # Identify pending merges specific to this leaf directory
         folder_merges = {k: v for k, v in PENDING_MERGES.items() if v['leaf_dir'] == leaf_dir}
-        
+
+        # Computed once, used by both phase 1 and phase 2 (navigating away from an
+        # unfinished merge review should still be able to jump to the next chapter).
+        try:
+            current_idx = leaf_dirs.index(leaf_dir)
+        except ValueError:
+            current_idx = -1
+
+        prev_url = None
+        if current_idx > 0:
+            prev_leaf = leaf_dirs[current_idx - 1]
+            prev_first = get_current_first_image(prev_leaf)
+            if prev_first:
+                prev_b64 = base64.urlsafe_b64encode(str(prev_first).encode('utf-8')).decode('utf-8')
+                path_map[prev_b64] = prev_first
+                prev_url = f"/edit/{prev_b64}"
+
+        next_url = None
+        if current_idx != -1 and current_idx < len(leaf_dirs) - 1:
+            next_leaf = leaf_dirs[current_idx + 1]
+            next_first = get_current_first_image(next_leaf)
+            if next_first:
+                next_b64 = base64.urlsafe_b64encode(str(next_first).encode('utf-8')).decode('utf-8')
+                path_map[next_b64] = next_first
+                next_url = f"/edit/{next_b64}"
+
         if not folder_merges:
             # Phase 1: Selection and actions (Delete / Merge / Split)
-            
-            try:
-                current_idx = leaf_dirs.index(leaf_dir)
-            except ValueError:
-                current_idx = -1
-
-            prev_url = None
-            if current_idx > 0:
-                prev_leaf = leaf_dirs[current_idx - 1]
-                prev_first = get_current_first_image(prev_leaf)
-                if prev_first:
-                    prev_b64 = base64.urlsafe_b64encode(str(prev_first).encode('utf-8')).decode('utf-8')
-                    path_map[prev_b64] = prev_first
-                    prev_url = f"/edit/{prev_b64}"
-
-            next_url = None
-            if current_idx != -1 and current_idx < len(leaf_dirs) - 1:
-                next_leaf = leaf_dirs[current_idx + 1]
-                next_first = get_current_first_image(next_leaf)
-                if next_first:
-                    next_b64 = base64.urlsafe_b64encode(str(next_first).encode('utf-8')).decode('utf-8')
-                    path_map[next_b64] = next_first
-                    next_url = f"/edit/{next_b64}"
-            
             try:
                 files = sorted([
                     f for f in leaf_dir.iterdir()
@@ -184,16 +246,29 @@ def start_web_ui(images_list, port, thumb_size, supported_extensions, mask_popup
                 return f"Error accessing leaf folder: {e}", 500
                 
             images_data = []
-            for f in files:
+            last_idx = len(files) - 1
+            for idx, f in enumerate(files):
                 f_b64 = base64.urlsafe_b64encode(str(f).encode('utf-8')).decode('utf-8')
                 path_map[f_b64] = f # Enables image viewing via /image/<b64>
-                
+
+                banner_suggestion = None
+                if idx == 0:
+                    top_cut = check_banner_suggestion(f, 'top')
+                    if top_cut is not None:
+                        banner_suggestion = {'position': 'top', 'cut_pct': top_cut}
+                if idx == last_idx and banner_suggestion is None:
+                    bottom_cut = check_banner_suggestion(f, 'bottom')
+                    if bottom_cut is not None:
+                        banner_suggestion = {'position': 'bottom', 'cut_pct': bottom_cut}
+
                 images_data.append({
                     'b64': f_b64,
                     'display_name': f.name,
                     'chapter': leaf_dir.name,
                     'serie': serie_dir.name if serie_dir else "Unknown",
-                    'site': site_dir.name if site_dir else "Unknown"
+                    'site': site_dir.name if site_dir else "Unknown",
+                    'is_credit_match': check_credit_match(f),
+                    'banner_suggestion': banner_suggestion
                 })
                 
             return render_template(
@@ -227,8 +302,8 @@ def start_web_ui(images_list, port, thumb_size, supported_extensions, mask_popup
                 images=images_data,
                 main_b64=main_b64,
                 thumb_size=thumb_size,
-                prev_url=None,
-                next_url=None,
+                prev_url=prev_url,
+                next_url=next_url,
                 mask_popups=mask_popups
             )
 
@@ -237,7 +312,47 @@ def start_web_ui(images_list, port, thumb_size, supported_extensions, mask_popup
         if b64 not in path_map:
             return "Image not found", 404
         return_to = request.args.get('return_to', '')
-        return render_template('split.html', b64=b64, return_to=return_to, mask_popups=mask_popups)
+        suggest_pct = request.args.get('suggest_pct', type=float)
+        suggest_side = request.args.get('suggest_side', '')
+        return render_template(
+            'split.html', b64=b64, return_to=return_to, mask_popups=mask_popups,
+            suggest_pct=suggest_pct, suggest_side=suggest_side,
+            context='workflow', token='', image_url=f'/image/{b64}'
+        )
+
+    @app.route('/api_remove_banner', methods=['POST'])
+    def api_remove_banner():
+        """Crops out a marked top/bottom slice (embedded credit banner) from a
+        single image in place, and remembers its hash for future auto-suggestion."""
+        data = request.json
+        b64 = data.get('b64')
+        cut_percent = data.get('cut_percent')
+        remove_side = data.get('remove_side')
+
+        target_path = path_map.get(b64)
+        if not target_path or not target_path.exists():
+            return jsonify({"status": "error", "message": "Image not found or already deleted."})
+        if remove_side not in ('top', 'bottom'):
+            return jsonify({"status": "error", "message": "Invalid side."})
+        try:
+            cut_percent = float(cut_percent)
+        except (TypeError, ValueError):
+            return jsonify({"status": "error", "message": "Invalid cut position."})
+        if not (0 < cut_percent < 100):
+            return jsonify({"status": "error", "message": "Cut position out of range."})
+
+        banner_hash = crop_remove_banner(target_path, cut_percent, remove_side)
+        if banner_hash is None:
+            return jsonify({"status": "error", "message": "Failed to crop the image."})
+
+        bucket = known_banners.setdefault(remove_side, [])
+        learned = not is_known_credit_hash(banner_hash, bucket, credit_banner_threshold)
+        if learned:
+            bucket.append(banner_hash)
+            if credit_banners_path:
+                save_credit_banners(credit_banners_path, known_banners)
+
+        return jsonify({"status": "ok", "learned": learned})
 
     @app.route('/api_do_split', methods=['POST'])
     def api_do_split():

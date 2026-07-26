@@ -1,4 +1,4 @@
-# Image Workflow Automation Toolkit
+# CopyScan - All in One
 
 > **Automated, multi-step workflow for comic, manga, and webtoon image sets. CLI and Web hybrid.**
 
@@ -6,25 +6,24 @@
 
 ## Features
 
-* **Cross-platform**: Windows & Linux compatible.
-* **Customizable**: Via `config.yaml` and CLI overrides, with startup validation that catches missing or misconfigured keys before anything runs.
+* **Cross-platform**: Windows & Linux compatible. Mostly tested on Windows so far, bugs to be expected on Linux...
+* **Customizable**: Via `config.yaml` and CLI overrides.
 * **CLI UX**: Color, progress, and error reporting powered by [rich](https://github.com/Textualize/rich).
 * **Advanced Web UI**, all in a single browser tab:
-  * **Global Sort**: Fast manual review of every chapter, with a live thumbnail always showing the current first page (self-healing after edits, deletions, merges or splits).
-  * **Leaf Editor**: Opens a specific chapter folder to:
+  * **Global Sort**: Fast manual review of every chapter, with thumbnails always showing the current first page (self-healing after edits, deletions, merges or splits).
+  * **Chapter Editor**: Opens a specific chapter folder to:
     * Permanently delete individual pages.
     * **Vertically merge consecutive images** (useful when a hosting site does an unwanted horizontal cut), with a dedicated validation step to accept or reject each generated merge before it's finalized.
-    * **Split a single image** into multiple pages via an interactive cutting tool (horizontal/vertical markers, zoom), with automatic, conflict-free renumbering of the whole folder afterward.
-    * **Prev/Next Chapter navigation**: jump directly to the previous or next chapter without going back to the main gallery first.
-  * One-tab navigation: moving between the main gallery, a chapter editor, and the split studio reuses the same tab and reloads with up-to-date data every time — no stale thumbnails, no manual refresh.
+    * **Split a single image** into multiple pages via an interactive cutting tool (horizontal markers, zoom), with automatic, conflict-free renumbering of the whole folder afterward.
   * **Optional popup masking**: confirmation dialogs and alerts in the Web UI can be silently auto-accepted via `mask_security_popups` in `config.yaml`, for a faster, uninterrupted review pass.
   * Responsive CSS tooltips and dynamic thumbnails.
 * **External tools integration**: [ImageMagick](https://imagemagick.org/) (for integrity checks) and [7-Zip](https://www.7-zip.org/) (for compression).
-  * If ImageMagick is missing, the CLI offers to skip the integrity check step for the current run instead of hard-failing.
+  * If ImageMagick is missing, the CLI offers to skip the integrity check step for the current run instead just stopping the process.
   * If 7-Zip is missing, the CLI offers to fall back to Python's built-in `zipfile` module for compression (7-Zip remains the preferred, faster option when available).
-* **Flexible logging**: log file location can be overridden per run via `--log-path`, disabled entirely via `log_enabled: false` in `config.yaml`, and the destination folder is created automatically if it doesn't exist.
-* **Flexible folder layout**: works with the standard `root_dir/Parent1/Parent2/Leaf` hierarchy by default, or with a flat `root_dir/Leaf` layout via `--local`, for one-off or single-series batches.
-* **Safe, no-data-loss logic**: Suffix-safe renaming and non-destructive operations.
+* **Flexible logging**: log file location can be overridden per run via `--log-path`, disabled entirely via `log_enabled: false` in `config.yaml`.
+* **Flexible folder layout**: works with a standard `root_dir/Parent1/Parent2/Leaf` hierarchy by default, or with a flat `root_dir/Leaf` layout via `--local`, for one-off or single-series batches.
+* **Automatic port collision avoidance**: the Web UI and the standalone [Hash Maintenance tool](#hash-maintenance-tool) share a single `web_port` setting. If it's already taken (e.g. both are running at once), the next free port is found automatically and used instead — no manual port juggling needed.
+* **Safe, no-data-loss logic**: Suffix-safe renaming and non-destructive operations. Your destination folder should never loss data.
 
 ---
 
@@ -76,8 +75,8 @@ Root/
 
 ## Quick Start
 
-1. **Configure**: Copy `config.example.yaml` to `config.yaml`, then edit `config.yaml` to set your input/output paths and feature toggles. `config.yaml` is gitignored, so your local paths are never committed.
-2. **Organize**: Place data into the hierarchy described above.
+1. **Configure**: Copy `config.example.yaml` to `config.yaml`, then edit `config.yaml` to set your input/output paths and feature toggles.
+2. **Organize**: Place data into the hierarchy described above (Mihon's style).
 3. **Execute**:
 ```shell
 python main.py
@@ -101,8 +100,11 @@ python main.py
 1. **Integrity Check**: Strict validation of images using `magick identify -verbose`, run in parallel across files. Skipped entirely (no ImageMagick lookup) if `step_1` is disabled.
 2. **Manual Sort & Edit (Web UI)**: A local Flask server (`127.0.0.1` only) opens in your browser for:
    * Global review — flag first pages for deletion across all chapters at once.
-   * Per-chapter editing — for any chapter, delete pages, merge consecutive images vertically (with a review/undo step before finalizing), split one image into several with an interactive marker-based tool, or jump to the previous/next chapter directly.
+   * Per-chapter editing — for any chapter, delete pages (optionally jumping straight to the next chapter afterward), merge consecutive images vertically (with a dedicated review step — **Validate**, **Validate & jump to next chapter**, or **Cancel Merges** to discard every pending merge and restore the original unmerged pages), split one image into several with an interactive marker-based tool, or jump to the previous/next chapter directly.
+   * Split tool markers can be placed by clicking, and dragged to fine-tune their position (cursor turns into a resize arrow when hovering a marker).
    * Confirmation popups and alerts can be auto-accepted via `mask_security_popups` for a faster review pass.
+   * **Known credit page detection**: every image is compared (perceptual hash, via `imagehash`) against a growing local database of previously-confirmed "credit page" images. Matches are pre-selected for deletion (shown with a "Known credit" tag) — you still validate the deletion yourself. Select any image and click **"🧠 Delete & Remember as Credit"** to delete it and teach the system that image for future chapters/series; it takes effect immediately for the rest of the current session, and persists across runs via `credit_hashes_path`.
+   * **Embedded credit banner detection**: for banners merged into the top of a chapter's first page or the bottom of its last page (rather than a standalone page), the first/last image is scanned for a match against a growing local database of known banner crops. A match shows a "📎 Likely banner" tag on the chapter's grid view — clicking it opens the Split tool with the boundary already marked at the detected position (still draggable for fine-tuning). Confirm with **"🧠 Remove Above"** / **"🧠 Remove Below"** to crop it out in place and remember it for next time (persists via `credit_banners_path`). A banner merged in the *middle* of a page is rare enough to not be worth automating: split the page into pieces with the existing Split tool, delete the middle slice, then use "Merge Pairs" to stitch the remaining pieces back together.
 3. **Regex Cleanup**: Automated deletion of files matching patterns in `delete_regex` (e.g., stray `.nomedia` files).
 4. **Empty Folder Pruning**: Recursive cleanup of empty directory structures.
 5. **Leaf Folder Renaming**: Regex-based, conflict-proof renaming of chapter folders using the first matching rule in `rename_regex`.
@@ -113,6 +115,22 @@ python main.py
 9. **Final Move & Cleanup**: Deployment of results to `dest_dir` and final purge of empty source folders. With `--local`, Leaf folders are moved directly to `dest_dir` instead of their Parent2 folders.
 
 Each step can be toggled on or off in `config.yaml` under `steps_active`, or skipped for a single run via `--skip-step`.
+
+---
+
+## Hash Maintenance Tool
+
+`hash_maintenance.py` is a **standalone** Flask tool for reviewing and curating the credit-page / credit-banner hash databases used by Step 2 — it's completely independent of the main workflow and can be launched any time, whether or not `main.py` is running.
+
+```shell
+python hash_maintenance.py
+```
+
+* Reads `credit_hashes_path`, `credit_banners_path`, `credit_hash_threshold`, `credit_banner_threshold`, and `web_port` from `config.yaml` next to the script by default (`--config <path>` to point elsewhere; `--credit-hashes-path`, `--credit-banners-path`, `--credit-hash-threshold`, `--credit-banner-threshold`, `--port` to override individually without touching the file).
+* **Add a hash**: a single upload/drop zone accepts any reference image. It then opens the same Split tool used by the main workflow, letting you either **validate the whole image as-is** (added to the credit-page database) or **mark a top/bottom slice** and confirm it as a banner (added to the corresponding banner database) — no need to pick a category up front.
+* **Review & prune**: each database is listed as a table. Near-duplicate hashes are automatically clustered by Hamming distance and tagged (e.g. "cluster #2 (3)"), with a one-click "Select redundant duplicates" action to pre-check every member but the first in each cluster before deleting.
+* On startup, the console prints the exact resolved path of the config file and both hash databases.
+* Shares the `web_port` setting with the main Web UI (see [Automatic port collision avoidance](#features) above): whichever of the two starts first gets that port, the other automatically moves to the next free one.
 
 ---
 
@@ -128,6 +146,10 @@ csv_1_path: "C:\\Path\\To\\Your\\Project\\exception.txt"
 csv_2_path: "C:\\Path\\To\\Your\\Project\\batchexception.txt"
 log_path: "C:\\Path\\To\\Your\\Project\\workflow.log"
 log_enabled: true   # Set to false to disable the log file entirely
+credit_hashes_path: "C:\\Path\\To\\Your\\Project\\credit_hashes.json"  # Known credit-page hash database (step 2)
+credit_hash_threshold: 8  # Max perceptual-hash distance (0-64) to consider a page a known credit page
+credit_banners_path: "C:\\Path\\To\\Your\\Project\\credit_banners.json"  # Known embedded-banner hash database (step 2)
+credit_banner_threshold: 16  # Max perceptual-hash distance (0-64) for embedded top/bottom banner detection
 
 # Supported file extensions
 supported_extensions:
@@ -142,7 +164,7 @@ supported_extensions:
 # Timing & Web UI
 sleep_time: 1      # Pause (seconds) between steps
 im_timeout: 20      # Timeout (seconds) per ImageMagick call
-web_port: 5002      # Local port for the Web UI
+web_port: 5002      # Shared by the main Web UI and hash_maintenance.py; auto-increments if taken
 thumb_size: "220px" # Thumbnail width in the Web UI
 
 # Enable/disable individual steps (step_5_1 is optional; defaults to step_5's value if omitted)
@@ -180,7 +202,8 @@ rename_regex:
 * **Invalid or incomplete `config.yaml`**: The script exits immediately with the list of missing/mistyped keys — check against `config.example.yaml`.
 * **AVIF Issues**: Verify that your ImageMagick installation includes `libavif` support if Step 1 fails on valid files.
 * **Locked Files**: Ensure no external programs (viewers, file explorers) are locking your directories during the workflow.
-* **Web UI unreachable**: The server only binds to `127.0.0.1:<web_port>` — it's local-only by design and won't be reachable from other devices.
+* **Web UI unreachable**: The server only binds to `127.0.0.1:<web_port>` — it's local-only by design and won't be reachable from other devices. If `web_port` is already taken (e.g. the Hash Maintenance tool is already running), the next free port is used automatically and printed to the console at startup — check there for the actual URL if it's not the one you expected.
+* **Hash Maintenance tool shows unexpected/missing hashes**: this is almost always a path mismatch — the tool defaults to the `config.yaml` sitting next to `hash_maintenance.py`. Check the console output at startup: it prints the exact config file and both database paths it resolved, plus how many hashes were loaded from each.
 * **Logging**: Every operation is logged in the path specified by `log_path` in `config.yaml` (UTF-8 encoded), unless `log_enabled` is set to `false`. The destination folder is created automatically if missing; use `--log-path` to override the location for a single run.
 
 ---
@@ -188,6 +211,5 @@ rename_regex:
 ## Security Notice
 
 * All operations are **non-destructive** by default logic: suffix-safe renaming resolves naming conflicts, and the destination folder is never automatically cleaned by the tool.
-* The Web UI server is bound to `127.0.0.1` only and is never exposed to the network.
-* `config.yaml` is excluded from version control (see `.gitignore`); only `config.example.yaml`, with placeholder paths, is tracked.
+* The Web UI server is bound to `127.0.0.1` only and is never exposed to the network. The standalone Hash Maintenance tool follows the same rule.
 * `mask_security_popups: true` auto-accepts every confirmation dialog in the Web UI (including destructive actions like deletions and splits) — only enable it once you trust your review workflow, since it removes the "are you sure?" safety net.

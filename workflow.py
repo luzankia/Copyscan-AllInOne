@@ -12,7 +12,7 @@ from rich.progress import Progress
 from rich.prompt import Prompt
 from concurrent.futures import ThreadPoolExecutor
 
-from utils import console, get_leaf_dirs, get_parent2_dirs, merge_directories, resolve_conflict
+from utils import console, get_leaf_dirs, get_parent2_dirs, merge_directories, resolve_conflict, find_free_port
 from web_ui import start_web_ui
 
 def handle_step_error(errors, step_name, allow_rescan=False) -> str:
@@ -79,7 +79,7 @@ def step_1_integrity(config):
                 return f"Error {file_path}: {e}"
             return None
 
-        with Progress() as progress:
+        with Progress(console=console) as progress:
             task = progress.add_task("[cyan]Step 1: Checking image integrity (Strict Parallel)...", total=len(files_to_check))
             
             # Using ThreadPoolExecutor for parallelizing process calls
@@ -98,7 +98,9 @@ def step_1_integrity(config):
 
 def step_2_web_ui(config):
     root_dir = Path(config['root_dir'])
-    port = config['web_port']
+    port = find_free_port(config['web_port'])
+    if port != config['web_port']:
+        console.print(f"[yellow]Port {config['web_port']} is busy, using {port} instead.[/yellow]")
     exts = set(config['supported_extensions'])
     local_mode = config.get('local_mode', False)
 
@@ -119,7 +121,15 @@ def step_2_web_ui(config):
     console.print(f"[cyan]Step 2: Starting Web Server[/cyan]")
 
     mask_popups = config.get('mask_security_popups', False)
-    server_thread, completion_event = start_web_ui(first_images, port, config['thumb_size'], exts, mask_popups)
+    credit_hashes_path = Path(config['credit_hashes_path'])
+    credit_hash_threshold = config['credit_hash_threshold']
+    credit_banners_path = Path(config['credit_banners_path'])
+    credit_banner_threshold = config['credit_banner_threshold']
+    server_thread, completion_event = start_web_ui(
+        first_images, port, config['thumb_size'], exts, mask_popups,
+        credit_hashes_path, credit_hash_threshold,
+        credit_banners_path, credit_banner_threshold
+    )
     
     url = f"http://127.0.0.1:{port}"
     webbrowser.open(url)
@@ -143,7 +153,7 @@ def step_3_regex_clean(config):
     for leaf in get_leaf_dirs(root_dir, local_mode):
         files.extend([f for f in leaf.iterdir() if f.is_file()])
         
-    with Progress() as progress:
+    with Progress(console=console) as progress:
         task = progress.add_task("[cyan]Step 3: Regex file cleanup...", total=len(files))
         for f in files:
             for pattern in patterns:
@@ -168,7 +178,7 @@ def step_4_delete_empty(config):
         if d != root_dir
     ]
 
-    with Progress() as progress:
+    with Progress(console=console) as progress:
         task = progress.add_task("[cyan]Step 4: Deleting empty folders...", total=len(dirs_to_check))
         for dirpath in dirs_to_check:
             try:
@@ -189,7 +199,7 @@ def step_5_rename_leaf(config):
     
     leafs = list(get_leaf_dirs(root_dir, local_mode))
     
-    with Progress() as progress:
+    with Progress(console=console) as progress:
         task = progress.add_task("[cyan]Step 5: Renaming Leaf folders...", total=len(leafs))
         for leaf in leafs:
             matched = False
@@ -223,7 +233,7 @@ def step_5_1_clean_hash_suffix(config):
     pattern = re.compile(r'^(.+)_[A-Za-z0-9]+$')
     leafs = list(get_leaf_dirs(root_dir, local_mode))
     
-    with Progress() as progress:
+    with Progress(console=console) as progress:
         task = progress.add_task("[cyan]Step 5.1: Cleaning hash suffixes from Leaf folders...", total=len(leafs))
         for leaf in leafs:
             match = pattern.match(leaf.name)
@@ -254,7 +264,7 @@ def step_6_renumber_leaf(config):
     leafs = list(get_leaf_dirs(root_dir, local_mode))
     numeric_pattern = re.compile(r'^(\d+)$')
 
-    with Progress() as progress:
+    with Progress(console=console) as progress:
         task = progress.add_task("[cyan]Step 6: Renumbering Leaf folder files...", total=len(leafs))
         for leaf in leafs:
             # Collect files whose stem is purely numeric (e.g. "002"), ignoring
@@ -379,7 +389,7 @@ def step_7_compress(config):
             return f"Compression error on {leaf}: {e}"
         return None
 
-    with Progress() as progress:
+    with Progress(console=console) as progress:
         task = progress.add_task("[cyan]Step 7: Compressing Leaf folders (Parallel)...", total=len(leafs))
         
         # We limit the number of concurrent threads to a reasonable amount (e.g., 4 folders at a time)
@@ -403,30 +413,41 @@ def step_8_csv_rename(config):
     errors = []
 
     if config.get('local_mode', False):
-        # Step 7 relies on the root_dir/Parent1/Parent2 hierarchy, which doesn't
+        # Step 8 relies on the root_dir/Parent1/Parent2 hierarchy, which doesn't
         # exist in local mode (Leaf folders sit directly under root_dir).
         console.print("[blue]Step 8: Skipped (incompatible with --local, no Parent1/Parent2 hierarchy).[/blue]")
         return "next"
 
     # Step 8.1: Rename
     if csv_1.exists():
-        with open(csv_1, 'r', encoding='utf-8') as f:
+        # utf-8-sig transparently strips a leading BOM if the CSV was saved by
+        # an editor that adds one (e.g. Windows Notepad), which would otherwise
+        # corrupt the very first field of the first row.
+        with open(csv_1, 'r', encoding='utf-8-sig') as f:
             reader = csv.reader(f, delimiter=';')
-            for row in reader:
+            for row_num, row in enumerate(reader, start=1):
                 if len(row) >= 3:
+                    # Skip the header line if present (see exception.example.txt).
+                    if row_num == 1 and [v.strip().lower() for v in row[:3]] == ['folder', 'name', 'rename']:
+                        continue
                     p1, p2, new_p2 = row[0].strip(), row[1].strip(), row[2].strip()
                     src_dir = root_dir / p1 / p2
                     dest_dir = root_dir / p1 / new_p2
                     
                     if src_dir.exists():
                         merge_directories(src_dir, dest_dir, errors)
+                    else:
+                        logging.info(f"CSV rename (row {row_num}): source not found -> {src_dir}")
 
     # Step 8.2: Suffix
     if csv_2.exists():
-        with open(csv_2, 'r', encoding='utf-8') as f:
+        with open(csv_2, 'r', encoding='utf-8-sig') as f:
             reader = csv.reader(f, delimiter=';')
-            for row in reader:
+            for row_num, row in enumerate(reader, start=1):
                 if len(row) >= 2:
+                    # Skip the header line if present (see batchexception.example.txt).
+                    if row_num == 1 and [v.strip().lower() for v in row[:2]] == ['folder name', 'added element']:
+                        continue
                     p1, suffix = row[0].strip(), row[1].strip()
                     p1_dir = root_dir / p1
                     if p1_dir.exists():
@@ -434,6 +455,8 @@ def step_8_csv_rename(config):
                             if p2.is_dir():
                                 dest_dir = p1_dir / f"{p2.name} {suffix}"
                                 merge_directories(p2, dest_dir, errors)
+                    else:
+                        logging.info(f"CSV suffix (row {row_num}): Parent1 folder not found -> {p1_dir}")
 
     return handle_step_error(errors, "Step 8 (CSV Operations)")
 
@@ -451,7 +474,7 @@ def step_9_final_move(config):
     else:
         items_to_move = list(get_parent2_dirs(root_dir))
     
-    with Progress() as progress:
+    with Progress(console=console) as progress:
         task = progress.add_task("[cyan]Step 9: Moving and final cleanup...", total=len(items_to_move))
         
         # Move Phase
