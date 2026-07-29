@@ -6,6 +6,10 @@ csv_1_path: "C:\\Path\\To\\Your\\Project\\exception.txt"
 csv_2_path: "C:\\Path\\To\\Your\\Project\\batchexception.txt"
 log_path: "C:\\Path\\To\\Your\\Project\\workflow.log"
 log_enabled: true
+credit_hashes_path: "C:\\Path\\To\\Your\\Project\\credit_hashes.json"
+credit_hash_threshold: 8  # Max perceptual-hash distance (0-64) to consider a page a known credit page
+credit_banners_path: "C:\\Path\\To\\Your\\Project\\credit_banners.json"
+credit_banner_threshold: 16  # Max perceptual-hash distance (0-64) for embedded top/bottom banner detection
 
 # Supported extension in the workflow
 supported_extensions:
@@ -20,7 +24,8 @@ supported_extensions:
 # Timing & Ports
 sleep_time: 1
 im_timeout: 20
-web_port: 5002
+web_port: 5002  # Shared by the main Web UI and the standalone hash_maintenance.py tool.
+                # If already taken (e.g. both running at once), the next free port is used automatically.
 thumb_size: "220px"
 
 # Workflow Steps Activation

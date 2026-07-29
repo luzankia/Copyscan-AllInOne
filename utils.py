@@ -4,11 +4,52 @@ import io
 import shutil
 import logging
 import re
+import json
+import socket
 from pathlib import Path
 from rich.console import Console
 from rich.prompt import Prompt
+from PIL import Image
+import imagehash
+import numpy as np
 
 console = Console()
+
+def resolve_project_path(path_str: str, base_dir: Path) -> str:
+    """Resolve a config path relative to base_dir (typically the script's own
+    directory) rather than the process's current working directory.
+
+    Absolute paths (e.g. "C:\\Data\\..." or "Z:\\...") are returned unchanged.
+    Relative paths (e.g. "exception.txt", "logs/workflow.log") are anchored to
+    base_dir, so config.yaml stays portable regardless of where the script is
+    launched from."""
+    p = Path(path_str)
+    if p.is_absolute():
+        return str(p)
+    return str((base_dir / p).resolve())
+
+def find_free_port(start_port: int, host: str = '127.0.0.1', max_attempts: int = 50) -> int:
+    """Returns the first available TCP port at or after start_port, found by
+    attempting to bind a socket. Lets multiple tools share a single configured
+    port: the first one to start takes it, subsequent ones automatically move
+    to the next free port instead of failing on a collision.
+
+    Deliberately does NOT set SO_REUSEADDR on the test socket: on Windows,
+    that flag lets a bind() succeed even when another process already holds
+    the port, making the availability check unreliable (two tools could both
+    "detect" the port as free and collide). A plain bind() gives an accurate,
+    exclusive test on both Windows and Linux.
+
+    Raises RuntimeError if no free port is found within max_attempts."""
+    port = start_port
+    for _ in range(max_attempts):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            try:
+                s.bind((host, port))
+                return port
+            except OSError:
+                port += 1
+    raise RuntimeError(f"No free port found starting at {start_port} (tried {max_attempts} ports).")
 
 def setup_environment(log_path, log_enabled=True):
     """Enforce UTF-8 encoding and setup logging."""
@@ -84,35 +125,39 @@ def check_prerequisites(config):
             input("\nPress Enter to exit...")
             sys.exit(1)
 
+def natural_sort_key(path: Path):
+    """Splits a path's name on digit runs for natural, human-friendly ordering
+    (e.g. 'Ch.9' < 'Ch.20' < 'Ch.110', instead of the plain lexical order
+    that would put 'Ch.110' before 'Ch.20')."""
+    return [int(text) if text.isdigit() else text.lower() for text in re.split(r'(\d+)', path.name)]
+
+def _sorted_subdirs(parent: Path):
+    """Directly-contained subdirectories of parent, in natural sort order."""
+    return sorted((p for p in parent.iterdir() if p.is_dir()), key=natural_sort_key)
+
 def get_leaf_dirs(root_dir: Path, local_mode=False):
-    """Yield all Leaf directories.
+    """Yield all Leaf directories, in natural sort order.
     Standard layout: Root -> Parent1 -> Parent2 -> Leaf.
     Local layout (--local): Root -> Leaf (Leaf folders sit directly under root_dir).
     """
     if not root_dir.exists():
         return
     if local_mode:
-        for leaf in root_dir.iterdir():
-            if leaf.is_dir():
-                yield leaf
+        for leaf in _sorted_subdirs(root_dir):
+            yield leaf
         return
-    for p1 in root_dir.iterdir():
-        if p1.is_dir():
-            for p2 in p1.iterdir():
-                if p2.is_dir():
-                    for leaf in p2.iterdir():
-                        if leaf.is_dir():
-                            yield leaf
+    for p1 in _sorted_subdirs(root_dir):
+        for p2 in _sorted_subdirs(p1):
+            for leaf in _sorted_subdirs(p2):
+                yield leaf
 
 def get_parent2_dirs(root_dir: Path):
-    """Yield all Parent2 directories."""
+    """Yield all Parent2 directories, in natural sort order."""
     if not root_dir.exists():
         return
-    for p1 in root_dir.iterdir():
-        if p1.is_dir():
-            for p2 in p1.iterdir():
-                if p2.is_dir():
-                    yield p1, p2
+    for p1 in _sorted_subdirs(root_dir):
+        for p2 in _sorted_subdirs(p1):
+            yield p1, p2
 
 def resolve_conflict(target_path: Path, is_file=False) -> Path:
     """Resolve naming conflicts by appending ' (x)'."""
@@ -150,3 +195,260 @@ def merge_directories(src_dir: Path, dest_dir: Path, error_list: list):
     except Exception as e:
         error_list.append(f"Merge error {src_dir} -> {dest_dir}: {str(e)}")
         logging.error(f"Merge error {src_dir}: {str(e)}")
+
+def load_credit_banners(path: Path) -> dict:
+    """Load known embedded-banner hashes, keyed by position ('top'/'bottom').
+    Returns {'top': [], 'bottom': []} if the file doesn't exist or is unreadable."""
+    default = {"top": [], "bottom": []}
+    if not path.exists():
+        return default
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        if isinstance(data, dict):
+            return {
+                "top": [str(h) for h in data.get("top", [])],
+                "bottom": [str(h) for h in data.get("bottom", [])],
+            }
+        logging.warning(f"Credit banner file {path} is not a JSON object; ignoring.")
+        return default
+    except Exception as e:
+        logging.error(f"Failed to load credit banners from {path}: {e}")
+        return default
+
+def save_credit_banners(path: Path, banners: dict):
+    """Persist known embedded-banner hashes to a JSON file."""
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        cleaned = {
+            "top": list(dict.fromkeys(banners.get("top", []))),
+            "bottom": list(dict.fromkeys(banners.get("bottom", []))),
+        }
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump(cleaned, f, indent=2)
+    except Exception as e:
+        logging.error(f"Failed to save credit banners to {path}: {e}")
+
+def suggest_banner_cut(image_path: Path, position: str, known_hashes: list, threshold: int,
+                        min_pct: float = 3, max_pct: float = 35, step_pct: float = 0.5):
+    """Sweeps candidate banner heights near the given edge ('top' or 'bottom') of the
+    image, looking for the slice that best matches a known banner hash. Returns a
+    (cut_pct, matched_hash) tuple where cut_pct is the resulting cut boundary as a Y
+    position (percentage from the TOP of the image, 0-100) - the same convention used
+    when a marker is placed by clicking on the image - so the caller can use it
+    directly to pre-fill the split tool's marker and later pass it to
+    crop_remove_banner unchanged. matched_hash is the specific known hash (hex string)
+    that produced the best match, so the caller can offer to delete just that entry
+    if the suggestion turns out to be unusable. Returns None if no match is found
+    within `threshold`. Height is unknown in advance (banners vary in size), hence
+    the sweep instead of a fixed offset."""
+    if not known_hashes:
+        return None
+    try:
+        img = Image.open(image_path)
+        img.load()
+    except Exception as e:
+        logging.warning(f"Could not open {image_path} for banner detection: {e}")
+        return None
+
+    width, height = img.size
+    known_matrix = _stack_hashes(known_hashes)
+    if known_matrix is None:
+        img.close()
+        return None
+
+    best_banner_height_pct, best_dist, best_hash_idx = None, None, None
+    pct = min_pct
+    while pct <= max_pct:
+        # pct here is the candidate banner HEIGHT (from the edge), used only for
+        # the search - converted to a Y-from-top position just before returning.
+        cut_px = max(1, min(height - 1, int(height * pct / 100)))
+        box = (0, 0, width, cut_px) if position == 'top' else (0, height - cut_px, width, height)
+        try:
+            candidate = imagehash.phash(img.crop(box)).hash.flatten()
+        except Exception:
+            pct += step_pct
+            continue
+
+        distances = np.count_nonzero(known_matrix != candidate, axis=1)
+        min_dist = int(distances.min())
+        if best_dist is None or min_dist < best_dist:
+            best_dist = min_dist
+            best_banner_height_pct = pct
+            best_hash_idx = int(distances.argmin())
+        pct += step_pct
+
+    img.close()
+
+    if best_dist is None or best_dist > threshold:
+        return None
+
+    # Convert "banner height from edge" to "Y position from top", matching the
+    # convention used by manual marker placement and crop_remove_banner.
+    cut_y_pct = best_banner_height_pct if position == 'top' else (100 - best_banner_height_pct)
+    return cut_y_pct, known_hashes[best_hash_idx]
+
+def compute_banner_slice_hash(image_path: Path, cut_percent: float, side: str):
+    """Computes the perceptual hash of just the top/bottom slice of an image at
+    the given marker position (Y-from-top, same convention as crop_remove_banner)
+    WITHOUT modifying the source file. Used by the standalone hash-maintenance
+    tool to learn a banner hash from a throwaway reference upload."""
+    try:
+        img = Image.open(image_path)
+        img.load()
+        width, height = img.size
+        marker_px = max(1, min(height - 1, int(round(height * cut_percent / 100))))
+        box = (0, 0, width, marker_px) if side == 'top' else (0, marker_px, width, height)
+        slice_hash = str(imagehash.phash(img.crop(box)))
+        img.close()
+        return slice_hash
+    except Exception as e:
+        logging.error(f"Failed to compute banner slice hash from {image_path}: {e}")
+        return None
+
+def crop_remove_banner(image_path: Path, cut_percent: float, remove_side: str):
+    """Crops out a banner slice using cut_percent as the marker's Y position measured
+    from the TOP of the image (0-100), matching how markers are placed by clicking
+    on the image in the split tool - regardless of remove_side.
+    - remove_side='top': removes everything ABOVE the marker (rows 0..marker),
+      keeps everything below.
+    - remove_side='bottom': removes everything BELOW the marker (rows marker..end),
+      keeps everything above.
+    Overwrites image_path with the remaining content, and returns the phash (hex
+    string) of the removed slice, or None on failure."""
+    try:
+        img = Image.open(image_path)
+        img.load()
+        width, height = img.size
+        marker_px = max(1, min(height - 1, int(round(height * cut_percent / 100))))
+
+        if remove_side == 'top':
+            banner_box, keep_box = (0, 0, width, marker_px), (0, marker_px, width, height)
+        else:
+            banner_box, keep_box = (0, marker_px, width, height), (0, 0, width, marker_px)
+
+        banner_crop = img.crop(banner_box)
+        keep_crop = img.crop(keep_box)
+        banner_hash = str(imagehash.phash(banner_crop))
+        img.close()
+
+        keep_crop.save(image_path)
+        return banner_hash
+    except Exception as e:
+        logging.error(f"Failed to crop banner from {image_path}: {e}")
+        return None
+
+def load_credit_hashes(path: Path) -> list:
+    """Load known 'credit page' perceptual hashes (hex strings) from a JSON file.
+    Returns an empty list if the file doesn't exist yet or is unreadable."""
+    if not path.exists():
+        return []
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        if isinstance(data, list):
+            return [str(h) for h in data]
+        logging.warning(f"Credit hash file {path} does not contain a JSON list; ignoring.")
+        return []
+    except Exception as e:
+        logging.error(f"Failed to load credit hashes from {path}: {e}")
+        return []
+
+def save_credit_hashes(path: Path, hashes: list):
+    """Persist known 'credit page' perceptual hashes (hex strings) to a JSON file."""
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        # Deduplicate while preserving order.
+        unique_hashes = list(dict.fromkeys(hashes))
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump(unique_hashes, f, indent=2)
+    except Exception as e:
+        logging.error(f"Failed to save credit hashes to {path}: {e}")
+
+def compute_phash(image_path: Path):
+    """Compute the perceptual hash (phash) of an image as a hex string.
+    Returns None if the image can't be opened/read."""
+    try:
+        with Image.open(image_path) as img:
+            return str(imagehash.phash(img))
+    except Exception as e:
+        logging.warning(f"Could not compute perceptual hash for {image_path}: {e}")
+        return None
+
+def _stack_hashes(hash_hex_list: list):
+    """Converts a list of hex-string perceptual hashes into a single 2D numpy
+    boolean array (one row per hash) for fast vectorized Hamming-distance
+    computation against many known hashes at once. Returns None if the list is
+    empty or contains no valid hashes."""
+    rows = []
+    for hex_str in hash_hex_list:
+        try:
+            rows.append(imagehash.hex_to_hash(hex_str).hash.flatten())
+        except Exception:
+            continue
+    return np.array(rows) if rows else None
+
+def is_known_credit_hash(image_hash_hex: str, known_hashes: list, threshold: int) -> bool:
+    """Check whether image_hash_hex is within `threshold` Hamming distance of any
+    hash in known_hashes (both as hex strings from imagehash). Vectorized so the
+    cost stays negligible even as the known-hash database grows into the
+    thousands."""
+    if not image_hash_hex or not known_hashes:
+        return False
+    try:
+        candidate = imagehash.hex_to_hash(image_hash_hex).hash.flatten()
+    except Exception:
+        return False
+    matrix = _stack_hashes(known_hashes)
+    if matrix is None:
+        return False
+    distances = np.count_nonzero(matrix != candidate, axis=1)
+    return bool(distances.min() <= threshold)
+
+def find_redundant_clusters(hash_list: list, threshold: int):
+    """Groups the indices of hash_list into clusters using single-linkage
+    clustering: two hashes end up in the same cluster if there's a chain of
+    hashes between them where each consecutive pair is within `threshold`
+    Hamming distance of each other. This surfaces near-duplicate hashes
+    (accumulated e.g. from minor marker adjustments across sessions) without
+    needing any visual/image representation - purely from the hash values.
+
+    Returns (clusters, dist_matrix) where clusters is a list of lists of
+    indices into hash_list (singletons included), and dist_matrix is an NxN
+    numpy array of pairwise Hamming distances (None if hash_list is empty)."""
+    n = len(hash_list)
+    if n == 0:
+        return [], None
+
+    matrix = _stack_hashes(hash_list)
+    if matrix is None:
+        return [[i] for i in range(n)], None
+
+    # Row-by-row (not a full NxN broadcast) to keep memory usage linear in n.
+    dist_matrix = np.zeros((n, n), dtype=int)
+    for i in range(n):
+        dist_matrix[i] = np.count_nonzero(matrix != matrix[i], axis=1)
+
+    parent = list(range(n))
+
+    def find(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def union(a, b):
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[ra] = rb
+
+    for i in range(n):
+        for j in range(i + 1, n):
+            if dist_matrix[i, j] <= threshold:
+                union(i, j)
+
+    groups = {}
+    for i in range(n):
+        groups.setdefault(find(i), []).append(i)
+
+    return list(groups.values()), dist_matrix
