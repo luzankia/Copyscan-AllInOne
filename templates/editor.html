@@ -12,9 +12,13 @@
         .gallery { display: flex; flex-wrap: wrap; gap: 20px; justify-content: center; margin-top: 20px; }
 
         .card { position: relative; cursor: pointer; border: 4px solid transparent; border-radius: 8px; transition: 0.2s; background: #222; text-align: center; width: {{ thumb_size }}; }
-        .card.selected { border-color: #3b82f6; box-shadow: 0 0 12px #3b82f6; }
+        .card.selected { border-color: #ef4444; box-shadow: 0 0 12px #ef4444; }
         .card.approved { border-color: #10b981; }
         .card.rejected { border-color: #ef4444; opacity: 0.3; }
+
+        .img-wrap { position: relative; }
+        .select-veil { position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: rgba(239, 68, 68, 0.35); opacity: 0; pointer-events: none; transition: 0.2s; border-top-left-radius: 4px; border-top-right-radius: 4px; }
+        .card.selected .select-veil { opacity: 1; }
 
         .card-label { padding: 6px; font-size: 12px; background: #1a1a1a; color: #ccc; word-break: break-all; border-bottom-left-radius: 4px; border-bottom-right-radius: 4px; }
 
@@ -79,12 +83,15 @@
         {% for item in images %}
             {% if phase == 1 %}
                 <div class="card {{ 'selected' if item.is_credit_match else '' }}" id="card-{{ item.b64 }}" data-b64="{{ item.b64 }}" data-credit="{{ 'true' if item.is_credit_match else 'false' }}" data-banner-position="{{ item.banner_suggestion.position if item.banner_suggestion else '' }}" data-banner-cut="{{ item.banner_suggestion.cut_pct if item.banner_suggestion else '' }}" onclick="toggleSelect('{{ item.b64 }}')">
-                    <div class="split-icon" onclick="openSplit(event, '{{ item.b64 }}', {{ item.banner_suggestion.cut_pct if item.banner_suggestion else 'null' }}, '{{ item.banner_suggestion.position if item.banner_suggestion else '' }}')" title="Split this image">✂️</div>
+                    <div class="split-icon" onclick="openSplit(event, '{{ item.b64 }}', {{ item.banner_suggestion.cut_pct if item.banner_suggestion else 'null' }}, '{{ item.banner_suggestion.position if item.banner_suggestion else '' }}', '{{ item.banner_suggestion.hash if item.banner_suggestion else '' }}')" title="Split this image">✂️</div>
                     <div class="tags-wrapper">
                         {% if item.is_credit_match %}<div class="credit-tag" title="Matches a known credit page">Known credit</div>{% endif %}
-                        {% if item.banner_suggestion %}<div class="banner-tag" onclick="openSplit(event, '{{ item.b64 }}', {{ item.banner_suggestion.cut_pct }}, '{{ item.banner_suggestion.position }}')" title="Detected a likely embedded credit banner ({{ item.banner_suggestion.position }}) — click to review in the split tool">📎 Likely banner ({{ item.banner_suggestion.position }})</div>{% endif %}
+                        {% if item.banner_suggestion %}<div class="banner-tag" onclick="openSplit(event, '{{ item.b64 }}', {{ item.banner_suggestion.cut_pct }}, '{{ item.banner_suggestion.position }}', '{{ item.banner_suggestion.hash }}')" title="Detected a likely embedded credit banner ({{ item.banner_suggestion.position }}) — click to review in the split tool">📎 Likely banner ({{ item.banner_suggestion.position }})</div>{% endif %}
                     </div>
-                    <img src="/image/{{ item.b64 }}" loading="lazy" />
+                    <div class="img-wrap">
+                        <img src="/image/{{ item.b64 }}" loading="lazy" />
+                        <div class="select-veil"></div>
+                    </div>
                     <div class="card-label">{{ item.display_name }}</div>
                     <div class="tooltip">
                         <strong>Chapter:</strong> {{ item.chapter }}<br>
@@ -162,11 +169,12 @@
             }
         }
 
-        function openSplit(event, b64, suggestPct, suggestSide) {
+        function openSplit(event, b64, suggestPct, suggestSide, suggestHash) {
             event.stopPropagation();
             let url = '/split/' + b64 + '?return_to=' + encodeURIComponent('{{ main_b64 }}');
             if (suggestPct !== null && suggestPct !== undefined && suggestSide) {
                 url += '&suggest_pct=' + suggestPct + '&suggest_side=' + suggestSide;
+                if (suggestHash) url += '&suggest_hash=' + encodeURIComponent(suggestHash);
             }
             window.location.href = url;
         }

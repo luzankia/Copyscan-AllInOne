@@ -4,11 +4,17 @@ import sys
 import time
 from pathlib import Path
 
-from utils import setup_environment, check_prerequisites, console
+from utils import setup_environment, check_prerequisites, console, resolve_project_path
 import workflow
 
 # Valid step tokens accepted by --skip-step (includes sub-step 5.1)
 VALID_STEP_TOKENS = ["1", "2", "3", "4", "5", "5.1", "6", "7", "8", "9"]
+
+# Resolve config.yaml relative to this script's location, not the current
+# working directory, so main.py finds it regardless of where it's launched
+# from (same convention as hash_maintenance.py).
+SCRIPT_DIR = Path(__file__).resolve().parent
+DEFAULT_CONFIG_PATH = SCRIPT_DIR / "config.yaml"
 
 # Required keys expected in config.yaml, with their expected Python type
 REQUIRED_CONFIG_KEYS = {
@@ -68,8 +74,12 @@ def validate_config(config, config_path):
         console.print(f"[bold red]Invalid type for key(s) in {config_path}: {', '.join(wrong_type)}[/bold red]")
         sys.exit(1)
 
-def parse_cli_args(config):
+def build_arg_parser():
     parser = argparse.ArgumentParser(description="Image Processing Workflow CLI")
+    parser.add_argument(
+        "--config", type=str, default=str(DEFAULT_CONFIG_PATH),
+        help=f"Path to config.yaml to use (default: {DEFAULT_CONFIG_PATH})"
+    )
     parser.add_argument("--root-dir", type=str, help="Override root_dir")
     parser.add_argument("--dest-dir", type=str, help="Override dest_dir")
     parser.add_argument("--log-path", type=str, help="Override log_path (log file destination)")
@@ -86,19 +96,14 @@ def parse_cli_args(config):
         help="Steps to skip, e.g. '2 5.1 6' (valid values: 1, 2, 3, 4, 5, 5.1, 6, 7, 8, 9)",
         default=[]
     )
+    return parser
 
-    args = parser.parse_args()
 
+def apply_cli_args(config, args):
     if args.root_dir: config['root_dir'] = args.root_dir
     if args.dest_dir: config['dest_dir'] = args.dest_dir
     if args.log_path: config['log_path'] = args.log_path
     if args.local: config['local_mode'] = True
-
-    invalid = [s for s in args.skip_step if s not in VALID_STEP_TOKENS]
-    if invalid:
-        console.print(f"[bold red]Invalid --skip-step value(s): {', '.join(invalid)}[/bold red]")
-        console.print(f"[yellow]Valid values are: {', '.join(VALID_STEP_TOKENS)}[/yellow]")
-        sys.exit(1)
 
     for step in args.skip_step:
         step_key = f"step_{step.replace('.', '_')}"
@@ -107,6 +112,19 @@ def parse_cli_args(config):
         # honored by execute_workflow.
         config['steps_active'][step_key] = False
 
+    return config
+
+# Config keys resolved relative to SCRIPT_DIR when given as relative paths
+# (not the CLI-facing root_dir/dest_dir, which point to arbitrary scan
+# folders that may live on a different drive entirely).
+PROJECT_PATH_KEYS = [
+    "csv_1_path", "csv_2_path", "log_path",
+    "credit_hashes_path", "credit_banners_path",
+]
+
+def resolve_project_paths(config):
+    for key in PROJECT_PATH_KEYS:
+        config[key] = resolve_project_path(config[key], SCRIPT_DIR)
     return config
 
 def execute_workflow(config):
@@ -157,22 +175,37 @@ def execute_workflow(config):
             time.sleep(sleep_t)
 
 if __name__ == "__main__":
-    # 1. Load initial configuration
-    config = load_config("config.yaml")
-    
-    # 2. Apply command line arguments if present
-    config = parse_cli_args(config)
-    
-    # 3. Initialize the environment (logging, encoding)
+    # 1. Parse CLI args first so --config (if given) is known before loading
+    parser = build_arg_parser()
+    args = parser.parse_args()
+
+    invalid = [s for s in args.skip_step if s not in VALID_STEP_TOKENS]
+    if invalid:
+        console.print(f"[bold red]Invalid --skip-step value(s): {', '.join(invalid)}[/bold red]")
+        console.print(f"[yellow]Valid values are: {', '.join(VALID_STEP_TOKENS)}[/yellow]")
+        sys.exit(1)
+
+    # 2. Load configuration (defaults to config.yaml next to this script)
+    config = load_config(args.config)
+
+    # 3. Apply command line arguments if present
+    config = apply_cli_args(config, args)
+
+    # 3b. Resolve project-relative paths (csv/log/credit-hash files) against
+    # this script's own directory, so relative values in config.yaml work
+    # regardless of the launch cwd.
+    config = resolve_project_paths(config)
+
+    # 4. Initialize the environment (logging, encoding)
     setup_environment(config['log_path'], config['log_enabled'])
-    
-    # 4. Check system prerequisites (ImageMagick, 7-Zip)
+
+    # 5. Check system prerequisites (ImageMagick, 7-Zip)
     check_prerequisites(config)
-    
-    # 5. Run the workflow
+
+    # 6. Run the workflow
     execute_workflow(config)
 
-    # 6. FINAL PAUSE
+    # 7. FINAL PAUSE
     console.print("\n[bold magenta]===================================================[/bold magenta]")
     console.print("[bold green]✓ The workflow has been completed successfully![/bold green]")
     console.print("[dim]Press ENTER to close this window...[/dim]")

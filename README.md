@@ -20,6 +20,8 @@
 * **External tools integration**: [ImageMagick](https://imagemagick.org/) (for integrity checks) and [7-Zip](https://www.7-zip.org/) (for compression).
   * If ImageMagick is missing, the CLI offers to skip the integrity check step for the current run instead just stopping the process.
   * If 7-Zip is missing, the CLI offers to fall back to Python's built-in `zipfile` module for compression (7-Zip remains the preferred, faster option when available).
+* **Portable configuration**: `config.yaml` is looked up next to the script by default (`--config <path>` to point elsewhere), and the project-related paths inside it (`csv_1_path`, `csv_2_path`, `log_path`, `credit_hashes_path`, `credit_banners_path`) can be given as relative paths — they're resolved against the script's own folder, not the current working directory, so the whole setup stays portable regardless of where you launch it from.
+* **Natural chapter ordering**: chapters are listed everywhere (main gallery, previous/next navigation) in natural numeric order (`Ch.2 < Ch.9 < Ch.20 < Ch.110`), not plain lexical order.
 * **Flexible logging**: log file location can be overridden per run via `--log-path`, disabled entirely via `log_enabled: false` in `config.yaml`.
 * **Flexible folder layout**: works with a standard `root_dir/Parent1/Parent2/Leaf` hierarchy by default, or with a flat `root_dir/Leaf` layout via `--local`, for one-off or single-series batches.
 * **Automatic port collision avoidance**: the Web UI and the standalone [Hash Maintenance tool](#hash-maintenance-tool) share a single `web_port` setting. If it's already taken (e.g. both are running at once), the next free port is found automatically and used instead — no manual port juggling needed.
@@ -83,6 +85,7 @@ python main.py
 ```
 
 * **CLI Overrides**:
+  * `--config <path>` — use a specific `config.yaml` instead of the one next to `main.py`.
   * `--root-dir <path>` / `--dest-dir <path>` — override `root_dir` / `dest_dir` from `config.yaml` for a single run.
   * `--log-path <path>` — override `log_path` from `config.yaml` for a single run; the destination folder is created automatically if it doesn't exist.
   * `--local` — treat Leaf folders as sitting directly under `root_dir` (flat `root_dir/Leaf` layout) instead of the standard `root_dir/Parent1/Parent2/Leaf` hierarchy. Affects Steps 1 through 7 and Step 9's final move. Step 8 (CSV Operations) is automatically skipped in this mode, since it relies on the Parent1/Parent2 hierarchy — use `--skip-step 8` explicitly, or leave it enabled and it will simply no-op.
@@ -99,12 +102,12 @@ python main.py
 
 1. **Integrity Check**: Strict validation of images using `magick identify -verbose`, run in parallel across files. Skipped entirely (no ImageMagick lookup) if `step_1` is disabled.
 2. **Manual Sort & Edit (Web UI)**: A local Flask server (`127.0.0.1` only) opens in your browser for:
-   * Global review — flag first pages for deletion across all chapters at once.
-   * Per-chapter editing — for any chapter, delete pages (optionally jumping straight to the next chapter afterward), merge consecutive images vertically (with a dedicated review step — **Validate**, **Validate & jump to next chapter**, or **Cancel Merges** to discard every pending merge and restore the original unmerged pages), split one image into several with an interactive marker-based tool, or jump to the previous/next chapter directly.
+   * Global review — every chapter is listed with its current first page (self-healing after edits, deletions, merges or splits), in natural numeric order. Click anywhere on a chapter to open it in the Chapter Editor; validate once you're done reviewing to move on to the next workflow step.
+   * Per-chapter editing — for any chapter, delete pages (optionally jumping straight to the next chapter afterward), merge consecutive images vertically (with a dedicated review step — **Validate**, **Validate & jump to next chapter**, or **Cancel Merges** to discard every pending merge and restore the original unmerged pages), split one image into several with an interactive marker-based tool, or jump to the previous/next chapter directly. Selected images (pending deletion or merge) are highlighted in red with a translucent overlay, so it's clear at a glance which pages will be affected.
    * Split tool markers can be placed by clicking, and dragged to fine-tune their position (cursor turns into a resize arrow when hovering a marker).
    * Confirmation popups and alerts can be auto-accepted via `mask_security_popups` for a faster review pass.
-   * **Known credit page detection**: every image is compared (perceptual hash, via `imagehash`) against a growing local database of previously-confirmed "credit page" images. Matches are pre-selected for deletion (shown with a "Known credit" tag) — you still validate the deletion yourself. Select any image and click **"🧠 Delete & Remember as Credit"** to delete it and teach the system that image for future chapters/series; it takes effect immediately for the rest of the current session, and persists across runs via `credit_hashes_path`.
-   * **Embedded credit banner detection**: for banners merged into the top of a chapter's first page or the bottom of its last page (rather than a standalone page), the first/last image is scanned for a match against a growing local database of known banner crops. A match shows a "📎 Likely banner" tag on the chapter's grid view — clicking it opens the Split tool with the boundary already marked at the detected position (still draggable for fine-tuning). Confirm with **"🧠 Remove Above"** / **"🧠 Remove Below"** to crop it out in place and remember it for next time (persists via `credit_banners_path`). A banner merged in the *middle* of a page is rare enough to not be worth automating: split the page into pieces with the existing Split tool, delete the middle slice, then use "Merge Pairs" to stitch the remaining pieces back together.
+   * **Known credit page detection**: every image is compared (perceptual hash, via `imagehash`) against a growing local database of previously-confirmed "credit page" images. A match is flagged with a "Known credit" tag (informational — shown in the global review and inside the Chapter Editor). Inside the Chapter Editor, select the matching page(s) and click **"🧠 Remember Credit"** to delete it and teach the system that image for future chapters/series; it takes effect immediately for the rest of the current session, and persists across runs via `credit_hashes_path`.
+   * **Embedded credit banner detection**: for banners merged into the top of a chapter's first page or the bottom of its last page (rather than a standalone page), the first/last image is scanned for a match against a growing local database of known banner crops. A match shows a "📎 Likely banner" tag on the chapter's grid view — clicking it opens the Split tool with the boundary already marked at the detected position (still draggable for fine-tuning), alongside a banner naming which known hash triggered the suggestion and a **"🗑 Delete this hash"** button to remove that specific entry from the database if the suggestion turns out to be badly placed or unusable. Confirm with **"🧠 Remove Above"** / **"🧠 Remove Below"** to crop it out in place and remember it for next time (persists via `credit_banners_path`). A banner merged in the *middle* of a page is rare enough to not be worth automating: split the page into pieces with the existing Split tool, delete the middle slice, then use "Merge Pairs" to stitch the remaining pieces back together.
 3. **Regex Cleanup**: Automated deletion of files matching patterns in `delete_regex` (e.g., stray `.nomedia` files).
 4. **Empty Folder Pruning**: Recursive cleanup of empty directory structures.
 5. **Leaf Folder Renaming**: Regex-based, conflict-proof renaming of chapter folders using the first matching rule in `rename_regex`.
@@ -142,13 +145,17 @@ python hash_maintenance.py
 # Paths (all required)
 root_dir: "C:\\Path\\To\\Your\\Input"
 dest_dir: "C:\\Path\\To\\Your\\Output"
-csv_1_path: "C:\\Path\\To\\Your\\Project\\exception.txt"
-csv_2_path: "C:\\Path\\To\\Your\\Project\\batchexception.txt"
-log_path: "C:\\Path\\To\\Your\\Project\\workflow.log"
+# csv_1_path, csv_2_path, log_path, credit_hashes_path, and credit_banners_path
+# accept either an absolute path or a relative one. Relative paths are resolved
+# against the script's own folder (not the current working directory), so you
+# can keep the whole project self-contained, e.g.:
+csv_1_path: "exception.txt"
+csv_2_path: "batchexception.txt"
+log_path: "workflow.log"
 log_enabled: true   # Set to false to disable the log file entirely
-credit_hashes_path: "C:\\Path\\To\\Your\\Project\\credit_hashes.json"  # Known credit-page hash database (step 2)
+credit_hashes_path: "credit_hashes.json"  # Known credit-page hash database (step 2)
 credit_hash_threshold: 8  # Max perceptual-hash distance (0-64) to consider a page a known credit page
-credit_banners_path: "C:\\Path\\To\\Your\\Project\\credit_banners.json"  # Known embedded-banner hash database (step 2)
+credit_banners_path: "credit_banners.json"  # Known embedded-banner hash database (step 2)
 credit_banner_threshold: 16  # Max perceptual-hash distance (0-64) for embedded top/bottom banner detection
 
 # Supported file extensions

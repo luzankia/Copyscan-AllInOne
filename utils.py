@@ -15,6 +15,19 @@ import numpy as np
 
 console = Console()
 
+def resolve_project_path(path_str: str, base_dir: Path) -> str:
+    """Resolve a config path relative to base_dir (typically the script's own
+    directory) rather than the process's current working directory.
+
+    Absolute paths (e.g. "C:\\Data\\..." or "Z:\\...") are returned unchanged.
+    Relative paths (e.g. "exception.txt", "logs/workflow.log") are anchored to
+    base_dir, so config.yaml stays portable regardless of where the script is
+    launched from."""
+    p = Path(path_str)
+    if p.is_absolute():
+        return str(p)
+    return str((base_dir / p).resolve())
+
 def find_free_port(start_port: int, host: str = '127.0.0.1', max_attempts: int = 50) -> int:
     """Returns the first available TCP port at or after start_port, found by
     attempting to bind a socket. Lets multiple tools share a single configured
@@ -112,35 +125,39 @@ def check_prerequisites(config):
             input("\nPress Enter to exit...")
             sys.exit(1)
 
+def natural_sort_key(path: Path):
+    """Splits a path's name on digit runs for natural, human-friendly ordering
+    (e.g. 'Ch.9' < 'Ch.20' < 'Ch.110', instead of the plain lexical order
+    that would put 'Ch.110' before 'Ch.20')."""
+    return [int(text) if text.isdigit() else text.lower() for text in re.split(r'(\d+)', path.name)]
+
+def _sorted_subdirs(parent: Path):
+    """Directly-contained subdirectories of parent, in natural sort order."""
+    return sorted((p for p in parent.iterdir() if p.is_dir()), key=natural_sort_key)
+
 def get_leaf_dirs(root_dir: Path, local_mode=False):
-    """Yield all Leaf directories.
+    """Yield all Leaf directories, in natural sort order.
     Standard layout: Root -> Parent1 -> Parent2 -> Leaf.
     Local layout (--local): Root -> Leaf (Leaf folders sit directly under root_dir).
     """
     if not root_dir.exists():
         return
     if local_mode:
-        for leaf in root_dir.iterdir():
-            if leaf.is_dir():
-                yield leaf
+        for leaf in _sorted_subdirs(root_dir):
+            yield leaf
         return
-    for p1 in root_dir.iterdir():
-        if p1.is_dir():
-            for p2 in p1.iterdir():
-                if p2.is_dir():
-                    for leaf in p2.iterdir():
-                        if leaf.is_dir():
-                            yield leaf
+    for p1 in _sorted_subdirs(root_dir):
+        for p2 in _sorted_subdirs(p1):
+            for leaf in _sorted_subdirs(p2):
+                yield leaf
 
 def get_parent2_dirs(root_dir: Path):
-    """Yield all Parent2 directories."""
+    """Yield all Parent2 directories, in natural sort order."""
     if not root_dir.exists():
         return
-    for p1 in root_dir.iterdir():
-        if p1.is_dir():
-            for p2 in p1.iterdir():
-                if p2.is_dir():
-                    yield p1, p2
+    for p1 in _sorted_subdirs(root_dir):
+        for p2 in _sorted_subdirs(p1):
+            yield p1, p2
 
 def resolve_conflict(target_path: Path, is_file=False) -> Path:
     """Resolve naming conflicts by appending ' (x)'."""
@@ -215,13 +232,16 @@ def save_credit_banners(path: Path, banners: dict):
 def suggest_banner_cut(image_path: Path, position: str, known_hashes: list, threshold: int,
                         min_pct: float = 3, max_pct: float = 35, step_pct: float = 0.5):
     """Sweeps candidate banner heights near the given edge ('top' or 'bottom') of the
-    image, looking for the slice that best matches a known banner hash. Returns the
-    resulting cut boundary as a Y position (percentage from the TOP of the image,
-    0-100) - the same convention used when a marker is placed by clicking on the
-    image - so the caller can use it directly to pre-fill the split tool's marker
-    and later pass it to crop_remove_banner unchanged. Returns None if no match is
-    found within `threshold`. Height is unknown in advance (banners vary in size),
-    hence the sweep instead of a fixed offset."""
+    image, looking for the slice that best matches a known banner hash. Returns a
+    (cut_pct, matched_hash) tuple where cut_pct is the resulting cut boundary as a Y
+    position (percentage from the TOP of the image, 0-100) - the same convention used
+    when a marker is placed by clicking on the image - so the caller can use it
+    directly to pre-fill the split tool's marker and later pass it to
+    crop_remove_banner unchanged. matched_hash is the specific known hash (hex string)
+    that produced the best match, so the caller can offer to delete just that entry
+    if the suggestion turns out to be unusable. Returns None if no match is found
+    within `threshold`. Height is unknown in advance (banners vary in size), hence
+    the sweep instead of a fixed offset."""
     if not known_hashes:
         return None
     try:
@@ -237,7 +257,7 @@ def suggest_banner_cut(image_path: Path, position: str, known_hashes: list, thre
         img.close()
         return None
 
-    best_banner_height_pct, best_dist = None, None
+    best_banner_height_pct, best_dist, best_hash_idx = None, None, None
     pct = min_pct
     while pct <= max_pct:
         # pct here is the candidate banner HEIGHT (from the edge), used only for
@@ -250,9 +270,12 @@ def suggest_banner_cut(image_path: Path, position: str, known_hashes: list, thre
             pct += step_pct
             continue
 
-        min_dist = int(np.count_nonzero(known_matrix != candidate, axis=1).min())
+        distances = np.count_nonzero(known_matrix != candidate, axis=1)
+        min_dist = int(distances.min())
         if best_dist is None or min_dist < best_dist:
-            best_dist, best_banner_height_pct = min_dist, pct
+            best_dist = min_dist
+            best_banner_height_pct = pct
+            best_hash_idx = int(distances.argmin())
         pct += step_pct
 
     img.close()
@@ -262,7 +285,8 @@ def suggest_banner_cut(image_path: Path, position: str, known_hashes: list, thre
 
     # Convert "banner height from edge" to "Y position from top", matching the
     # convention used by manual marker placement and crop_remove_banner.
-    return best_banner_height_pct if position == 'top' else (100 - best_banner_height_pct)
+    cut_y_pct = best_banner_height_pct if position == 'top' else (100 - best_banner_height_pct)
+    return cut_y_pct, known_hashes[best_hash_idx]
 
 def compute_banner_slice_hash(image_path: Path, cut_percent: float, side: str):
     """Computes the perceptual hash of just the top/bottom slice of an image at

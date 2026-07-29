@@ -68,6 +68,10 @@
             <h3>✂️ Image Split Studio</h3>
             <small style="color:#aaa;">Click anywhere to place a marker; drag an existing marker to fine-tune its position.</small>
         </div>
+        <div id="hash-info" style="display:none; margin-top:8px; background:#0f2733; border:1px solid #38bdf8; padding:8px 12px; border-radius:6px; font-size:12px; color:#7dd3fc; align-items:center; gap:10px;">
+            <span>📎 Marker pre-placed from a known banner hash: <code id="hash-value" style="color:#fff;"></code></span>
+            <button class="btn danger" style="width:auto; height:auto; padding:5px 10px; font-size:12px;" onclick="deleteBannerHash()">🗑 Delete this hash</button>
+        </div>
     </div>
 
     <div class="workspace">
@@ -103,6 +107,7 @@
         // Auto-suggested cut position from known-banner detection (may be absent).
         const suggestPct = {{ suggest_pct if suggest_pct is not none else 'null' }};
         const suggestSide = {{ (suggest_side | tojson) if suggest_side else 'null' }};
+        const suggestHash = {{ (suggest_hash | tojson) if suggest_hash else 'null' }};
 
         let draggingMarker = null; // { type: 'h'|'v', index: number, element: HTMLElement }
 
@@ -163,7 +168,29 @@
                 cutsH.push(suggestPct);
                 createMarker('h', suggestPct, index, true);
             }
+            if (suggestHash) {
+                document.getElementById('hash-value').textContent = suggestHash;
+                document.getElementById('hash-info').style.display = 'flex';
+            }
         });
+
+        function deleteBannerHash() {
+            if (!suggestHash || !suggestSide) return;
+            if (!confirmAction("Remove this hash from the banner database? It won't be suggested again.")) return;
+
+            fetch('/api_delete_banner_hash', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ side: suggestSide, hash: suggestHash })
+            }).then(res => res.json()).then(data => {
+                if (data.status === 'ok') {
+                    document.getElementById('hash-info').style.display = 'none';
+                    alertMsg(data.removed ? "Hash removed from the database." : "Hash was not found (already removed?).");
+                } else {
+                    alertMsg("Error: " + data.message);
+                }
+            });
+        }
 
         function removeBanner(side) {
             if (cutsH.length !== 1) {

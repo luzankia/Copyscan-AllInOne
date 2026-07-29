@@ -28,7 +28,7 @@ from utils import (
     console, load_credit_hashes, save_credit_hashes,
     load_credit_banners, save_credit_banners,
     compute_phash, is_known_credit_hash, find_redundant_clusters,
-    compute_banner_slice_hash, find_free_port
+    compute_banner_slice_hash, find_free_port, resolve_project_path
 )
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -170,7 +170,7 @@ def create_app(credit_hashes_path: Path, credit_banners_path: Path,
             return "Reference image not found (it may have already been processed).", 404
         return render_template(
             'split.html', b64='', return_to='', mask_popups=False,
-            suggest_pct=None, suggest_side='',
+            suggest_pct=None, suggest_side='', suggest_hash='',
             context='maintenance', token=token, image_url=f'/reference_image/{token}'
         )
 
@@ -275,8 +275,8 @@ def main():
 
     settings = load_settings(args.config, args)
 
-    credit_hashes_path = Path(settings['credit_hashes_path']).resolve()
-    credit_banners_path = Path(settings['credit_banners_path']).resolve()
+    credit_hashes_path = Path(resolve_project_path(settings['credit_hashes_path'], SCRIPT_DIR))
+    credit_banners_path = Path(resolve_project_path(settings['credit_banners_path'], SCRIPT_DIR))
 
     # Print exactly what's being read, in full, so a path mismatch (wrong config
     # picked up, wrong working directory, stale/duplicate files, etc.) is obvious

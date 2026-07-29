@@ -9,7 +9,8 @@ from PIL import Image
 
 from utils import (
     load_credit_hashes, save_credit_hashes, compute_phash, is_known_credit_hash,
-    load_credit_banners, save_credit_banners, suggest_banner_cut, crop_remove_banner
+    load_credit_banners, save_credit_banners, suggest_banner_cut, crop_remove_banner,
+    natural_sort_key as get_natural_key
 )
 
 class ServerThread(threading.Thread):
@@ -54,8 +55,8 @@ def start_web_ui(images_list, port, thumb_size, supported_extensions, mask_popup
         return is_known_credit_hash(img_hash, known_credit_hashes, credit_hash_threshold)
 
     def check_banner_suggestion(file_path, position):
-        """Returns a suggested cut percentage (float) if file_path looks like it
-        contains a known embedded credit banner at the given edge, else None."""
+        """Returns a (cut_pct, matched_hash) tuple if file_path looks like it contains
+        a known embedded credit banner at the given edge, else None."""
         return suggest_banner_cut(
             file_path, position, known_banners.get(position, []), credit_banner_threshold
         )
@@ -72,10 +73,6 @@ def start_web_ui(images_list, port, thumb_size, supported_extensions, mask_popup
             merged.paste(top_img, (0, 0))
             merged.paste(bottom_img, (0, top_img.height))
             merged.save(output_path)
-
-    def get_natural_key(path):
-        """Allows natural sorting of files (e.g., 2.jpg comes before 10.jpg)."""
-        return [int(text) if text.isdigit() else text.lower() for text in re.split(r'(\d+)', path.name)]
 
     def get_current_first_image(leaf_dir):
         """Returns the current first valid image in leaf_dir (natural sort), or None if the folder has become empty/unreadable."""
@@ -253,13 +250,15 @@ def start_web_ui(images_list, port, thumb_size, supported_extensions, mask_popup
 
                 banner_suggestion = None
                 if idx == 0:
-                    top_cut = check_banner_suggestion(f, 'top')
-                    if top_cut is not None:
-                        banner_suggestion = {'position': 'top', 'cut_pct': top_cut}
+                    top_result = check_banner_suggestion(f, 'top')
+                    if top_result is not None:
+                        top_cut, top_hash = top_result
+                        banner_suggestion = {'position': 'top', 'cut_pct': top_cut, 'hash': top_hash}
                 if idx == last_idx and banner_suggestion is None:
-                    bottom_cut = check_banner_suggestion(f, 'bottom')
-                    if bottom_cut is not None:
-                        banner_suggestion = {'position': 'bottom', 'cut_pct': bottom_cut}
+                    bottom_result = check_banner_suggestion(f, 'bottom')
+                    if bottom_result is not None:
+                        bottom_cut, bottom_hash = bottom_result
+                        banner_suggestion = {'position': 'bottom', 'cut_pct': bottom_cut, 'hash': bottom_hash}
 
                 images_data.append({
                     'b64': f_b64,
@@ -314,11 +313,33 @@ def start_web_ui(images_list, port, thumb_size, supported_extensions, mask_popup
         return_to = request.args.get('return_to', '')
         suggest_pct = request.args.get('suggest_pct', type=float)
         suggest_side = request.args.get('suggest_side', '')
+        suggest_hash = request.args.get('suggest_hash', '')
         return render_template(
             'split.html', b64=b64, return_to=return_to, mask_popups=mask_popups,
-            suggest_pct=suggest_pct, suggest_side=suggest_side,
+            suggest_pct=suggest_pct, suggest_side=suggest_side, suggest_hash=suggest_hash,
             context='workflow', token='', image_url=f'/image/{b64}'
         )
+
+    @app.route('/api_delete_banner_hash', methods=['POST'])
+    def api_delete_banner_hash():
+        """Removes a single hash from the known-banner database (e.g. when a
+        pre-placed suggestion turns out to be unusable/badly located)."""
+        data = request.json
+        side = data.get('side')
+        hash_value = data.get('hash')
+
+        if side not in ('top', 'bottom') or not hash_value:
+            return jsonify({"status": "error", "message": "Invalid side or hash."})
+
+        bucket = known_banners.get(side, [])
+        if hash_value not in bucket:
+            return jsonify({"status": "ok", "removed": False})
+
+        bucket.remove(hash_value)
+        if credit_banners_path:
+            save_credit_banners(credit_banners_path, known_banners)
+        logging.info(f"Removed banner hash from database ({side}): {hash_value}")
+        return jsonify({"status": "ok", "removed": True})
 
     @app.route('/api_remove_banner', methods=['POST'])
     def api_remove_banner():
