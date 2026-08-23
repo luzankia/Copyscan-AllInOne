@@ -5,6 +5,12 @@
     <title>Split Image Studio</title>
     <style>
         body { font-family: 'Segoe UI', Arial, sans-serif; background: #121212; color: #fff; margin: 0; padding: 0; display: flex; flex-direction: column; height: 100vh; }
+
+        /* Same thin chapter-progress indicator as the Chapter Editor. Only
+           shown in the normal 'workflow' context — the standalone hash
+           maintenance tool reuses this page without a chapter context. */
+        .progress-track { width: 100%; height: 4px; flex-shrink: 0; background: rgba(128, 128, 128, 0.25); }
+        .progress-fill { height: 100%; width: 0%; background: linear-gradient(90deg, #22d3ee, #a855f7, #f43f5e); box-shadow: 0 0 6px rgba(0, 0, 0, 0.65), 0 0 3px rgba(255, 255, 255, 0.55); transition: width 0.3s ease; }
         .toolbar { background: #1a1a1a; padding: 12px 15px; border-bottom: 2px solid #333; z-index: 1000; box-shadow: 0 2px 10px rgba(0,0,0,0.5); }
         .toolbar-title { margin-top: 10px; }
         .toolbar-title h3 { margin: 0; }
@@ -36,6 +42,9 @@
     </style>
 </head>
 <body>
+    {% if context == 'workflow' and progress_pct is not none %}
+        <div class="progress-track"><div class="progress-fill" style="width: {{ progress_pct }}%;"></div></div>
+    {% endif %}
     <div class="toolbar">
         <div class="controls">
             {% if context == 'maintenance' %}
@@ -66,7 +75,7 @@
         </div>
         <div class="toolbar-title">
             <h3>✂️ Image Split Studio</h3>
-            <small style="color:#aaa;">Click anywhere to place a marker; drag an existing marker to fine-tune its position.</small>
+            <small style="color:#aaa;">Click anywhere to place a marker; drag an existing marker to fine-tune its position.{% if context != 'maintenance' %} Press <strong>X</strong> to execute the split.{% endif %}</small>
         </div>
         <div id="hash-info" style="display:none; margin-top:8px; background:#0f2733; border:1px solid #38bdf8; padding:8px 12px; border-radius:6px; font-size:12px; color:#7dd3fc; align-items:center; gap:10px;">
             <span>📎 Marker pre-placed from a known banner hash: <code id="hash-value" style="color:#fff;"></code></span>
@@ -329,6 +338,18 @@
                     goBack();
                 } else {
                     alertMsg("Error: " + data.message);
+                }
+            });
+        }
+
+        // Keyboard shortcut: X executes the split. Only wired up in the normal
+        // 'workflow' context, which is the only one where this button exists.
+        if (context !== 'maintenance') {
+            document.addEventListener('keydown', function (e) {
+                if (e.ctrlKey || e.altKey || e.metaKey) return;
+                if (e.key === 'x' || e.key === 'X') {
+                    e.preventDefault();
+                    submitSplit();
                 }
             });
         }

@@ -232,6 +232,11 @@ def start_web_ui(images_list, port, thumb_size, supported_extensions, mask_popup
                 path_map[next_b64] = next_first
                 next_url = f"/edit/{next_b64}"
 
+        # Overall progress through the chapter list, used to draw the thin
+        # progress bar at the top of the editor page.
+        total_chapters = len(leaf_dirs)
+        progress_pct = round(((current_idx + 1) / total_chapters) * 100, 2) if (current_idx != -1 and total_chapters > 0) else None
+
         if not folder_merges:
             # Phase 1: Selection and actions (Delete / Merge / Split)
             try:
@@ -280,6 +285,7 @@ def start_web_ui(images_list, port, thumb_size, supported_extensions, mask_popup
                 thumb_size=thumb_size,
                 prev_url=prev_url,
                 next_url=next_url,
+                progress_pct=progress_pct,
                 mask_popups=mask_popups
             )
         else:
@@ -303,6 +309,7 @@ def start_web_ui(images_list, port, thumb_size, supported_extensions, mask_popup
                 thumb_size=thumb_size,
                 prev_url=prev_url,
                 next_url=next_url,
+                progress_pct=progress_pct,
                 mask_popups=mask_popups
             )
 
@@ -314,10 +321,23 @@ def start_web_ui(images_list, port, thumb_size, supported_extensions, mask_popup
         suggest_pct = request.args.get('suggest_pct', type=float)
         suggest_side = request.args.get('suggest_side', '')
         suggest_hash = request.args.get('suggest_hash', '')
+
+        # Same progress-bar math as the Chapter Editor, derived from this
+        # image's own leaf folder so the bar stays accurate when arriving
+        # here from the split icon on any chapter.
+        leaf_dir = path_map[b64].parent
+        try:
+            current_idx = leaf_dirs.index(leaf_dir)
+        except ValueError:
+            current_idx = -1
+        total_chapters = len(leaf_dirs)
+        progress_pct = round(((current_idx + 1) / total_chapters) * 100, 2) if (current_idx != -1 and total_chapters > 0) else None
+
         return render_template(
             'split.html', b64=b64, return_to=return_to, mask_popups=mask_popups,
             suggest_pct=suggest_pct, suggest_side=suggest_side, suggest_hash=suggest_hash,
-            context='workflow', token='', image_url=f'/image/{b64}'
+            context='workflow', token='', image_url=f'/image/{b64}',
+            progress_pct=progress_pct
         )
 
     @app.route('/api_delete_banner_hash', methods=['POST'])

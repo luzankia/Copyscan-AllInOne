@@ -5,7 +5,10 @@
     <title>{{ title }}</title>
     <style>
         body { font-family: 'Segoe UI', Arial, sans-serif; background: #121212; color: #fff; margin: 0; padding: 20px; }
-        .header { position: sticky; top: 0; background: #1a1a1a; padding: 12px 15px; z-index: 1000; border-bottom: 2px solid #333; border-radius: 8px; }
+        .header { position: sticky; top: 4px; background: #1a1a1a; padding: 12px 15px; z-index: 1000; border-bottom: 2px solid #333; border-radius: 8px; }
+        
+        .progress-track { position: fixed; top: 0; left: 0; width: 100%; height: 4px; background: rgba(128, 128, 128, 0.25); z-index: 1002; }
+        .progress-fill { height: 100%; width: 0%; background: linear-gradient(90deg, #22d3ee, #a855f7, #f43f5e); box-shadow: 0 0 6px rgba(0, 0, 0, 0.65), 0 0 3px rgba(255, 255, 255, 0.55); transition: width 0.3s ease; }
         .title-row { margin-top: 10px; }
         .title-row h2 { margin: 0; font-size: 16px; word-break: break-word; }
         .instructions { font-size: 13px; color: #aaa; margin: 4px 0 0 0; }
@@ -49,28 +52,39 @@
         .btn:disabled { opacity: 0.35; cursor: not-allowed; }
         .tb-divider { width: 2px; height: 32px; background: #444; margin: 0 4px; }
         .zoom-label { min-width: 45px; text-align: center; }
+
+        .help-icon { position: relative; width: 42px; height: 42px; border-radius: 50%; background: #374151; color: #e5e7eb; font-weight: bold; font-size: 16px; display: flex; align-items: center; justify-content: center; cursor: help; border: 1px solid #555; box-sizing: border-box; }
+        .help-icon:hover { background: #4b5563; }
+        .help-tooltip { position: absolute; top: 52px; right: 0; width: 240px; background: rgba(0, 0, 0, 0.95); color: #fff; padding: 10px 14px; border-radius: 6px; font-size: 12px; line-height: 1.5; text-align: left; opacity: 0; pointer-events: none; transition: 0.2s; border: 1px solid #555; box-shadow: 0 4px 10px rgba(0,0,0,0.5); z-index: 2000; }
+        .help-icon:hover .help-tooltip { opacity: 1; }
     </style>
 </head>
 <body>
+    <div class="progress-track"><div class="progress-fill" style="width: {{ progress_pct if progress_pct is not none else 0 }}%;"></div></div>
     <div class="header">
         <div class="toolbar-row">
-            <button class="btn secondary" onclick="window.location.href = '/'">← Back to main</button>
-            <button class="btn secondary" {% if not prev_url %}disabled{% else %}onclick="window.location.href = '{{ prev_url }}'"{% endif %}>⏮ Prev Chapter</button>
-            <button class="btn secondary" {% if not next_url %}disabled{% else %}onclick="window.location.href = '{{ next_url }}'"{% endif %}>Next Chapter ⏭</button>
-            <div class="tb-divider"></div>
-
             {% if phase == 1 %}
+                <button class="btn secondary" onclick="window.location.href = '/'">← Back to main</button>
+                <button class="btn secondary" {% if not prev_url %}disabled{% else %}onclick="window.location.href = '{{ prev_url }}'"{% endif %}>⏮ Prev Chapter</button>
+                <button class="btn secondary" onclick="goNextChapter()">Next Chapter ⏭</button>
+                <div class="tb-divider"></div>
                 <button class="btn secondary" onclick="selectAll()">Select All</button>
                 <button class="btn secondary" onclick="deselectAll()">Deselect All</button>
                 <button class="btn primary" onclick="submitSelection('merge')">Merge Pairs</button>
-                <button class="btn danger" onclick="submitSelection('delete')">Delete Selection</button>
-                <button class="btn danger" onclick="deleteSelectionAndNext()">Delete Sel. &amp; ⏭</button>
+                <button class="btn danger" id="btn-delete-selection" onclick="handleDeleteClick(event)">Delete Selection</button>
                 <div class="tb-divider"></div>
-                <button class="btn warn" onclick="markAsCredit()">🧠 Remember Credit</button>
+                <button class="btn warn" id="btn-remember-credit" onclick="handleCreditClick(event)">🧠 Remember Credit</button>
+                <div class="tb-divider"></div>
+                <div class="help-icon">?
+                    <div class="help-tooltip"><strong>M</strong> = Merge Pairs. Hold <strong>Shift</strong> while clicking <strong>Delete Selection</strong> or <strong>Remember Credit</strong> — or use <strong>Shift+Delete</strong> / <strong>Shift+C</strong> — to also jump to the next chapter afterward.</div>
+                </div>
             {% else %}
                 <button class="btn secondary" onclick="cancelMerges()">Cancel Merges</button>
-                <button class="btn success" onclick="submitValidation()">Validate Merges</button>
-                <button class="btn success" onclick="submitValidationAndNext()">Validate &amp; ⏭</button>
+                <button class="btn success" id="btn-validate-merges" onclick="handleValidateClick(event)">Validate Merges</button>
+                <div class="tb-divider"></div>
+                <div class="help-icon">?
+                    <div class="help-tooltip"><strong>V</strong> = Validate Merges. Hold <strong>Shift</strong> while clicking (or use <strong>Shift+V</strong>) to also jump to the next chapter afterward.</div>
+                </div>
             {% endif %}
         </div>
         <div class="title-row">
@@ -122,6 +136,31 @@
         function alertMsg(msg) {
             if (MASK_POPUPS) { console.log(msg); return; }
             alert(msg);
+        }
+
+        const PHASE = {{ phase }};
+        const PREV_URL = {{ prev_url|tojson }};
+        const NEXT_URL = {{ next_url|tojson }};
+
+        // On the last chapter there is no next_url: fall back to the main page.
+        function goNextChapter() {
+            window.location.href = NEXT_URL || '/';
+        }
+
+        function handleDeleteClick(e) {
+            if (e.shiftKey) {
+                deleteSelectionAndNext();
+            } else {
+                submitSelection('delete');
+            }
+        }
+
+        function handleCreditClick(e) {
+            markAsCredit(e.shiftKey);
+        }
+
+        function handleValidateClick(e) {
+            submitValidation(e.shiftKey);
         }
 
         let selected = [];
@@ -218,58 +257,47 @@
                 body: JSON.stringify({selected: selected})
             }).then(res => res.json()).then(data => {
                 if (data.status === 'ok') {
-                    {% if next_url %}
-                        window.location.href = '{{ next_url }}';
-                    {% else %}
-                        window.location.reload();
-                    {% endif %}
+                    goNextChapter();
                 }
             });
         }
 
-        function markAsCredit() {
+        function markAsCredit(andNext) {
             if (selected.length === 0) {
                 alertMsg("Please select at least one image to remember as a credit page.");
                 return;
             }
-            if (!confirmAction("Delete the " + selected.length + " selected image(s) and remember them as known credit pages for future chapters?")) return;
+            const msg = andNext
+                ? "Delete the " + selected.length + " selected image(s), remember them as known credit pages, and move to the next chapter?"
+                : "Delete the " + selected.length + " selected image(s) and remember them as known credit pages for future chapters?";
+            if (!confirmAction(msg)) return;
 
             fetch('/mark_credit', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({selected: selected})
             }).then(res => res.json()).then(data => {
-                if (data.status === 'ok') window.location.reload();
-                else alertMsg("Error while marking credit pages.");
-            });
-        }
-
-        function submitValidation() {
-            fetch('/edit_finalize', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({rejected: rejected, main_b64: '{{ main_b64 }}'})
-            }).then(res => res.json()).then(data => {
                 if (data.status === 'ok') {
-                    window.location.href = '/edit/{{ main_b64 }}';
+                    if (andNext) goNextChapter();
+                    else window.location.reload();
                 } else {
-                    alertMsg("Error: " + data.message);
+                    alertMsg("Error while marking credit pages.");
                 }
             });
         }
 
-        function submitValidationAndNext() {
+        function submitValidation(andNext) {
             fetch('/edit_finalize', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({rejected: rejected, main_b64: '{{ main_b64 }}'})
             }).then(res => res.json()).then(data => {
                 if (data.status === 'ok') {
-                    {% if next_url %}
-                        window.location.href = '{{ next_url }}';
-                    {% else %}
+                    if (andNext) {
+                        goNextChapter();
+                    } else {
                         window.location.href = '/edit/{{ main_b64 }}';
-                    {% endif %}
+                    }
                 } else {
                     alertMsg("Error: " + data.message);
                 }
@@ -291,6 +319,90 @@
                 }
             });
         }
+
+        // Keyboard shortcuts.
+        // - Left/Right: previous/next chapter (both phases).
+        // - Phase 1 only: Delete / Shift+Delete (Delete Selection / Delete Sel. & Next),
+        //   C / Shift+C (Remember Credit / Remember Credit & Next), M (Merge Pairs).
+        // - Phase 2 only: V / Shift+V (Validate Merges / Validate Merges & Next).
+        document.addEventListener('keydown', function (e) {
+            if (e.ctrlKey || e.altKey || e.metaKey) return;
+            const tag = document.activeElement ? document.activeElement.tagName : '';
+            if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+
+            switch (e.key) {
+                case 'ArrowLeft':
+                    if (PREV_URL) {
+                        e.preventDefault();
+                        window.location.href = PREV_URL;
+                    }
+                    break;
+                case 'ArrowRight':
+                    e.preventDefault();
+                    goNextChapter();
+                    break;
+                case 'Delete':
+                    if (PHASE === 1) {
+                        e.preventDefault();
+                        if (e.shiftKey) {
+                            deleteSelectionAndNext();
+                        } else {
+                            submitSelection('delete');
+                        }
+                    }
+                    break;
+                case 'c':
+                case 'C':
+                    if (PHASE === 1) {
+                        e.preventDefault();
+                        markAsCredit(e.shiftKey);
+                    }
+                    break;
+                case 'm':
+                case 'M':
+                    if (PHASE === 1) {
+                        e.preventDefault();
+                        submitSelection('merge');
+                    }
+                    break;
+                case 'v':
+                case 'V':
+                    if (PHASE === 2) {
+                        e.preventDefault();
+                        submitValidation(e.shiftKey);
+                    }
+                    break;
+            }
+        });
+
+        // Label swap: while Shift is held, Delete Selection / Remember Credit
+        // (phase 1) and Validate Merges (phase 2) show a trailing "& ⏭" so it's
+        // clear the "and jump to next chapter" variant is armed — for both the
+        // keyboard shortcuts and a Shift-click. Button width is fixed in CSS,
+        // so this never shifts the layout. getElementById returns null for
+        // buttons that don't exist in the current phase, which is fine.
+        const SHIFT_SUFFIX = ' & ⏭';
+        const SHIFT_LABEL_BUTTONS = [
+            { id: 'btn-delete-selection', base: 'Delete Selection' },
+            { id: 'btn-remember-credit', base: '🧠 Remember Credit' },
+            { id: 'btn-validate-merges', base: 'Validate Merges' }
+        ];
+
+        function updateShiftLabels(isShift) {
+            SHIFT_LABEL_BUTTONS.forEach(({ id, base }) => {
+                const btn = document.getElementById(id);
+                if (btn) btn.textContent = base + (isShift ? SHIFT_SUFFIX : '');
+            });
+        }
+
+        document.addEventListener('keydown', function (e) {
+            if (e.key === 'Shift') updateShiftLabels(true);
+        });
+        document.addEventListener('keyup', function (e) {
+            if (e.key === 'Shift') updateShiftLabels(false);
+        });
+        // Alt-tabbing away while Shift is held would otherwise leave the labels stuck.
+        window.addEventListener('blur', function () { updateShiftLabels(false); });
     </script>
 </body>
 </html>
