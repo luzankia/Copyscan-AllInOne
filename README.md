@@ -106,16 +106,16 @@ python main.py
    * Per-chapter editing — for any chapter, delete pages (optionally jumping straight to the next chapter afterward), merge consecutive images vertically (with a dedicated review step — **Validate**, or **Cancel Merges** to discard every pending merge and restore the original unmerged pages), split one image into several with an interactive marker-based tool, or jump to the previous/next chapter directly. Selected images (pending deletion or merge) are highlighted in red with a translucent overlay, so it's clear at a glance which pages will be affected. On the last chapter, "Next Chapter" (and its keyboard shortcut) falls back to the main review page instead of being disabled. The merge-validation step only shows its Cancel/Validate buttons — no chapter navigation there.
    * A thin, high-contrast progress bar is pinned to the top of the webUI, showing overall progress through the chapter list (no numbers, just a proportional fill).
    * Keyboard shortcuts : 
-    * **←** / **→** previous/next chapter (both phases),
-    * Selection phase — **Delete** = Delete Selection,
-    * **Shift+Delete** = Delete Sel. & jump to next chapter.
-    * **C** = Remember Credit, 
-    * **Shift+C** = Remember Credit & jump to next chapter, 
-    * **M** = Merge Pairs,
-    * **V** = Validate Merges, 
-    * **X** executes split,
-    * Holding **Shift** show "& ⏭" and work for the mouse too,
-    * A "?" icon next to these buttons shows the behavior on hover. 
+     * **←** / **→** previous/next chapter (both phases),
+     * Selection phase — **Delete** = Delete Selection,
+     * **Shift+Delete** = Delete Sel. & jump to next chapter.
+     * **C** = Remember Credit, 
+     * **Shift+C** = Remember Credit & jump to next chapter, 
+     * **M** = Merge Pairs,
+     * **V** = Validate Merges, 
+     * **X** executes split,
+     * Holding **Shift** show "& ⏭" and work for the mouse too,
+     * A "?" icon next to these buttons shows the behavior on hover. 
    * Split tool markers can be placed by clicking, and dragged to fine-tune their position (cursor turns into a resize arrow when hovering a marker).
    * Confirmation popups and alerts can be auto-accepted via `mask_security_popups` for a faster review pass.
    * **Known credit page detection**: every image is compared (perceptual hash, via `imagehash`) against a growing local database of previously-confirmed "credit page" images. A match is flagged with a "Known credit" tag (informational — shown in the global review and inside the Chapter Editor). Inside the Chapter Editor, select the matching page(s) and click **"🧠 Remember Credit"** to delete it and teach the system that image for future chapters/series; it takes effect immediately for the rest of the current session, and persists across runs via `credit_hashes_path`.
