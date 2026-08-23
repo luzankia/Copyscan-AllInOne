@@ -12,7 +12,7 @@ from rich.progress import Progress
 from rich.prompt import Prompt
 from concurrent.futures import ThreadPoolExecutor
 
-from utils import console, get_leaf_dirs, get_parent2_dirs, merge_directories, resolve_conflict, find_free_port
+from utils import console, get_leaf_dirs, get_parent2_dirs, merge_directories, resolve_conflict, find_free_port, resolve_keyboard_shortcuts
 from web_ui import start_web_ui
 
 def handle_step_error(errors, step_name, allow_rescan=False) -> str:
@@ -125,10 +125,12 @@ def step_2_web_ui(config):
     credit_hash_threshold = config['credit_hash_threshold']
     credit_banners_path = Path(config['credit_banners_path'])
     credit_banner_threshold = config['credit_banner_threshold']
+    shortcuts = resolve_keyboard_shortcuts(config)
     server_thread, completion_event = start_web_ui(
         first_images, port, config['thumb_size'], exts, mask_popups,
         credit_hashes_path, credit_hash_threshold,
-        credit_banners_path, credit_banner_threshold
+        credit_banners_path, credit_banner_threshold,
+        shortcuts
     )
     
     url = f"http://127.0.0.1:{port}"

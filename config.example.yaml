@@ -43,6 +43,23 @@ steps_active:
 # Security Configurations
 mask_security_popups: false
 
+# Chapter Editor / Split Studio keyboard shortcuts (optional -- omit or leave
+# out individual entries to keep the defaults shown below). Each value is a
+# single JavaScript KeyboardEvent.key name; single letters are matched
+# case-insensitively. Full list of valid names:
+# https://developer.mozilla.org/en-US/docs/Web/API/UI_Events/Keyboard_event_key_values
+# Holding Shift on delete_selection / remember_credit / validate_merges also
+# jumps to the next chapter afterward -- that's fixed behavior, not a
+# separate binding.
+keyboard_shortcuts:
+  prev_chapter: "ArrowLeft"
+  next_chapter: "ArrowRight"
+  delete_selection: "Delete"
+  remember_credit: "C"
+  merge_pairs: "M"
+  validate_merges: "V"
+  execute_split: "X"
+
 # Regex configurations
 delete_regex:
   - '^\.nomedia$'

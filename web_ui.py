@@ -10,7 +10,7 @@ from PIL import Image
 from utils import (
     load_credit_hashes, save_credit_hashes, compute_phash, is_known_credit_hash,
     load_credit_banners, save_credit_banners, suggest_banner_cut, crop_remove_banner,
-    natural_sort_key as get_natural_key
+    natural_sort_key as get_natural_key, DEFAULT_KEYBOARD_SHORTCUTS
 )
 
 class ServerThread(threading.Thread):
@@ -31,10 +31,12 @@ TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
 
 def start_web_ui(images_list, port, thumb_size, supported_extensions, mask_popups=False,
                   credit_hashes_path=None, credit_hash_threshold=8,
-                  credit_banners_path=None, credit_banner_threshold=10):
+                  credit_banners_path=None, credit_banner_threshold=10,
+                  shortcuts=None):
     """Starts the Flask server for manual sorting, merging, and image splitting."""
     app = Flask(__name__, template_folder=str(TEMPLATES_DIR))
     completion_event = threading.Event()
+    shortcuts = shortcuts or DEFAULT_KEYBOARD_SHORTCUTS
     
     # Shared registries within the server instance
     path_map = {}
@@ -286,7 +288,8 @@ def start_web_ui(images_list, port, thumb_size, supported_extensions, mask_popup
                 prev_url=prev_url,
                 next_url=next_url,
                 progress_pct=progress_pct,
-                mask_popups=mask_popups
+                mask_popups=mask_popups,
+                shortcuts=shortcuts
             )
         else:
             # Phase 2: Validation of generated merges
@@ -310,7 +313,8 @@ def start_web_ui(images_list, port, thumb_size, supported_extensions, mask_popup
                 prev_url=prev_url,
                 next_url=next_url,
                 progress_pct=progress_pct,
-                mask_popups=mask_popups
+                mask_popups=mask_popups,
+                shortcuts=shortcuts
             )
 
     @app.route('/split/<b64>')
@@ -337,7 +341,7 @@ def start_web_ui(images_list, port, thumb_size, supported_extensions, mask_popup
             'split.html', b64=b64, return_to=return_to, mask_popups=mask_popups,
             suggest_pct=suggest_pct, suggest_side=suggest_side, suggest_hash=suggest_hash,
             context='workflow', token='', image_url=f'/image/{b64}',
-            progress_pct=progress_pct
+            progress_pct=progress_pct, shortcuts=shortcuts
         )
 
     @app.route('/api_delete_banner_hash', methods=['POST'])

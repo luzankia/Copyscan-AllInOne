@@ -6,7 +6,11 @@
     <style>
         body { font-family: 'Segoe UI', Arial, sans-serif; background: #121212; color: #fff; margin: 0; padding: 20px; }
         .header { position: sticky; top: 4px; background: #1a1a1a; padding: 12px 15px; z-index: 1000; border-bottom: 2px solid #333; border-radius: 8px; }
-        
+
+        /* Thin chapter-progress indicator, pinned to the very top of the
+           viewport. The gradient + dual glow (dark outer shadow, light inner
+           glow) keeps it clearly visible whether it sits over a dark or a
+           light background. */
         .progress-track { position: fixed; top: 0; left: 0; width: 100%; height: 4px; background: rgba(128, 128, 128, 0.25); z-index: 1002; }
         .progress-fill { height: 100%; width: 0%; background: linear-gradient(90deg, #22d3ee, #a855f7, #f43f5e); box-shadow: 0 0 6px rgba(0, 0, 0, 0.65), 0 0 3px rgba(255, 255, 255, 0.55); transition: width 0.3s ease; }
         .title-row { margin-top: 10px; }
@@ -76,14 +80,14 @@
                 <button class="btn warn" id="btn-remember-credit" onclick="handleCreditClick(event)">🧠 Remember Credit</button>
                 <div class="tb-divider"></div>
                 <div class="help-icon">?
-                    <div class="help-tooltip"><strong>M</strong> = Merge Pairs. Hold <strong>Shift</strong> while clicking <strong>Delete Selection</strong> or <strong>Remember Credit</strong> — or use <strong>Shift+Delete</strong> / <strong>Shift+C</strong> — to also jump to the next chapter afterward.</div>
+                    <div class="help-tooltip"><strong>{{ shortcuts.merge_pairs }}</strong> = Merge Pairs. Hold <strong>Shift</strong> while clicking <strong>Delete Selection</strong> or <strong>Remember Credit</strong> — or use <strong>Shift+{{ shortcuts.delete_selection }}</strong> / <strong>Shift+{{ shortcuts.remember_credit }}</strong> — to also jump to the next chapter afterward.</div>
                 </div>
             {% else %}
                 <button class="btn secondary" onclick="cancelMerges()">Cancel Merges</button>
                 <button class="btn success" id="btn-validate-merges" onclick="handleValidateClick(event)">Validate Merges</button>
                 <div class="tb-divider"></div>
                 <div class="help-icon">?
-                    <div class="help-tooltip"><strong>V</strong> = Validate Merges. Hold <strong>Shift</strong> while clicking (or use <strong>Shift+V</strong>) to also jump to the next chapter afterward.</div>
+                    <div class="help-tooltip"><strong>{{ shortcuts.validate_merges }}</strong> = Validate Merges. Hold <strong>Shift</strong> while clicking (or use <strong>Shift+{{ shortcuts.validate_merges }}</strong>) to also jump to the next chapter afterward.</div>
                 </div>
             {% endif %}
         </div>
@@ -141,12 +145,25 @@
         const PHASE = {{ phase }};
         const PREV_URL = {{ prev_url|tojson }};
         const NEXT_URL = {{ next_url|tojson }};
+        const SHORTCUTS = {{ shortcuts|tojson }};
+
+        // Reverse lookup (normalized key -> action name) so the keydown handler
+        // doesn't need to know the literal key values -- they come from
+        // config.yaml's `keyboard_shortcuts` section (utils.resolve_keyboard_shortcuts).
+        const KEY_TO_ACTION = {};
+        Object.entries(SHORTCUTS).forEach(([action, key]) => {
+            if (key) KEY_TO_ACTION[key.toLowerCase()] = action;
+        });
 
         // On the last chapter there is no next_url: fall back to the main page.
         function goNextChapter() {
             window.location.href = NEXT_URL || '/';
         }
 
+        // Delete Selection and Remember Credit are single buttons that behave
+        // differently while Shift is held (mouse click or keyboard shortcut) —
+        // see handleDeleteClick/handleCreditClick and the keydown handler below,
+        // plus updateShiftLabels() for the "& ⏭" label swap.
         function handleDeleteClick(e) {
             if (e.shiftKey) {
                 deleteSelectionAndNext();
@@ -320,28 +337,30 @@
             });
         }
 
-        // Keyboard shortcuts.
-        // - Left/Right: previous/next chapter (both phases).
-        // - Phase 1 only: Delete / Shift+Delete (Delete Selection / Delete Sel. & Next),
-        //   C / Shift+C (Remember Credit / Remember Credit & Next), M (Merge Pairs).
-        // - Phase 2 only: V / Shift+V (Validate Merges / Validate Merges & Next).
+        // Keyboard shortcuts. Bindings come from config.yaml's `keyboard_shortcuts`
+        // section (see SHORTCUTS/KEY_TO_ACTION above) -- prev_chapter/next_chapter
+        // work in both phases, delete_selection/remember_credit/merge_pairs are
+        // phase 1 only, validate_merges is phase 2 only. Shift on delete_selection /
+        // remember_credit / validate_merges is fixed behavior (jump to next chapter
+        // afterward), not a separate binding.
         document.addEventListener('keydown', function (e) {
             if (e.ctrlKey || e.altKey || e.metaKey) return;
             const tag = document.activeElement ? document.activeElement.tagName : '';
             if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
 
-            switch (e.key) {
-                case 'ArrowLeft':
+            const action = KEY_TO_ACTION[e.key.toLowerCase()];
+            switch (action) {
+                case 'prev_chapter':
                     if (PREV_URL) {
                         e.preventDefault();
                         window.location.href = PREV_URL;
                     }
                     break;
-                case 'ArrowRight':
+                case 'next_chapter':
                     e.preventDefault();
                     goNextChapter();
                     break;
-                case 'Delete':
+                case 'delete_selection':
                     if (PHASE === 1) {
                         e.preventDefault();
                         if (e.shiftKey) {
@@ -351,22 +370,19 @@
                         }
                     }
                     break;
-                case 'c':
-                case 'C':
+                case 'remember_credit':
                     if (PHASE === 1) {
                         e.preventDefault();
                         markAsCredit(e.shiftKey);
                     }
                     break;
-                case 'm':
-                case 'M':
+                case 'merge_pairs':
                     if (PHASE === 1) {
                         e.preventDefault();
                         submitSelection('merge');
                     }
                     break;
-                case 'v':
-                case 'V':
+                case 'validate_merges':
                     if (PHASE === 2) {
                         e.preventDefault();
                         submitValidation(e.shiftKey);

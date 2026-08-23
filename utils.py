@@ -125,6 +125,51 @@ def check_prerequisites(config):
             input("\nPress Enter to exit...")
             sys.exit(1)
 
+# Web UI keyboard shortcuts (Chapter Editor and Split Studio). Every entry is
+# a single JavaScript KeyboardEvent.key value -- see:
+# https://developer.mozilla.org/en-US/docs/Web/API/UI_Events/Keyboard_event_key_values
+# Single letters are matched case-insensitively, so "m" and "M" are the same
+# binding. Holding Shift on delete_selection / remember_credit / validate_merges
+# also jumps to the next chapter afterward -- that's fixed behavior, not a
+# separate binding to configure.
+DEFAULT_KEYBOARD_SHORTCUTS = {
+    "prev_chapter": "ArrowLeft",
+    "next_chapter": "ArrowRight",
+    "delete_selection": "Delete",
+    "remember_credit": "C",
+    "merge_pairs": "M",
+    "validate_merges": "V",
+    "execute_split": "X",
+}
+
+def resolve_keyboard_shortcuts(config: dict) -> dict:
+    """Merges config.yaml's optional `keyboard_shortcuts` section over
+    DEFAULT_KEYBOARD_SHORTCUTS, so a partial override doesn't drop the other
+    bindings. Unknown action names and empty/non-string values are ignored
+    (with a warning) and fall back to their default. Also warns -- without
+    failing -- if two actions end up bound to the same key."""
+    shortcuts = dict(DEFAULT_KEYBOARD_SHORTCUTS)
+    user_shortcuts = config.get('keyboard_shortcuts') or {}
+
+    for action, key in user_shortcuts.items():
+        if action not in shortcuts:
+            console.print(f"[yellow]Warning: unknown keyboard_shortcuts entry '{action}' in config.yaml (ignored).[/yellow]")
+            continue
+        if not isinstance(key, str) or not key.strip():
+            console.print(f"[yellow]Warning: keyboard_shortcuts.{action} must be a non-empty string; keeping default '{shortcuts[action]}'.[/yellow]")
+            continue
+        shortcuts[action] = key.strip()
+
+    seen = {}
+    for action, key in shortcuts.items():
+        norm = key.lower()
+        if norm in seen:
+            console.print(f"[yellow]Warning: keyboard_shortcuts '{seen[norm]}' and '{action}' are both bound to '{key}' -- only one will trigger.[/yellow]")
+        else:
+            seen[norm] = action
+
+    return shortcuts
+
 def natural_sort_key(path: Path):
     """Splits a path's name on digit runs for natural, human-friendly ordering
     (e.g. 'Ch.9' < 'Ch.20' < 'Ch.110', instead of the plain lexical order

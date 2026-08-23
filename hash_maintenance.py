@@ -28,7 +28,8 @@ from utils import (
     console, load_credit_hashes, save_credit_hashes,
     load_credit_banners, save_credit_banners,
     compute_phash, is_known_credit_hash, find_redundant_clusters,
-    compute_banner_slice_hash, find_free_port, resolve_project_path
+    compute_banner_slice_hash, find_free_port, resolve_project_path,
+    DEFAULT_KEYBOARD_SHORTCUTS
 )
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -171,7 +172,8 @@ def create_app(credit_hashes_path: Path, credit_banners_path: Path,
         return render_template(
             'split.html', b64='', return_to='', mask_popups=False,
             suggest_pct=None, suggest_side='', suggest_hash='',
-            context='maintenance', token=token, image_url=f'/reference_image/{token}'
+            context='maintenance', token=token, image_url=f'/reference_image/{token}',
+            progress_pct=None, shortcuts=DEFAULT_KEYBOARD_SHORTCUTS
         )
 
     def _cleanup_reference(token: str):

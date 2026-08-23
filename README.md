@@ -105,7 +105,7 @@ python main.py
    * Global review — every chapter is listed with its current first page (self-healing after edits, deletions, merges or splits), in natural numeric order. Click anywhere on a chapter to open it in the Chapter Editor; validate once you're done reviewing to move on to the next workflow step.
    * Per-chapter editing — for any chapter, delete pages (optionally jumping straight to the next chapter afterward), merge consecutive images vertically (with a dedicated review step — **Validate**, or **Cancel Merges** to discard every pending merge and restore the original unmerged pages), split one image into several with an interactive marker-based tool, or jump to the previous/next chapter directly. Selected images (pending deletion or merge) are highlighted in red with a translucent overlay, so it's clear at a glance which pages will be affected. On the last chapter, "Next Chapter" (and its keyboard shortcut) falls back to the main review page instead of being disabled. The merge-validation step only shows its Cancel/Validate buttons — no chapter navigation there.
    * A thin, high-contrast progress bar is pinned to the top of the webUI, showing overall progress through the chapter list (no numbers, just a proportional fill).
-   * Keyboard shortcuts : 
+   * Keyboard shortcuts (all rebindable via `keyboard_shortcuts` in `config.yaml`; defaults shown below) :
      * **←** / **→** previous/next chapter (both phases),
      * Selection phase — **Delete** = Delete Selection,
      * **Shift+Delete** = Delete Sel. & jump to next chapter.
@@ -218,6 +218,16 @@ steps_active:
 # Security Configurations
 mask_security_popups: false  # true = auto-accept every confirm/alert popup in the Web UI
 
+# Web UI keyboard shortcuts https://developer.mozilla.org/en-US/docs/Web/API/UI_Events/Keyboard_event_key_values
+keyboard_shortcuts:
+  prev_chapter: "ArrowLeft"
+  next_chapter: "ArrowRight"
+  delete_selection: "Delete"
+  remember_credit: "C"
+  merge_pairs: "M"
+  validate_merges: "V"
+  execute_split: "X"
+
 # Files to delete outright (step 3)
 delete_regex:
   - '^\.nomedia$'
@@ -240,6 +250,7 @@ rename_regex:
 * **Web UI unreachable**: The server only binds to `127.0.0.1:<web_port>` — it's local-only by design and won't be reachable from other devices. If `web_port` is already taken (e.g. the Hash Maintenance tool is already running), the next free port is used automatically and printed to the console at startup — check there for the actual URL if it's not the one you expected.
 * **Hash Maintenance tool shows unexpected/missing hashes**: this is almost always a path mismatch — the tool defaults to the `config.yaml` sitting next to `hash_maintenance.py`. Check the console output at startup: it prints the exact config file and both database paths it resolved, plus how many hashes were loaded from each.
 * **Logging**: Every operation is logged in the path specified by `log_path` in `config.yaml` (UTF-8 encoded), unless `log_enabled` is set to `false`. The destination folder is created automatically if missing; use `--log-path` to override the location for a single run.
+* **Keyboard shortcut not working as expected**: an unknown entry name, an empty value, or two actions bound to the same key under `keyboard_shortcuts` in `config.yaml` all print a `Warning:` line to the console at startup (the affected binding falls back to its default) — check there first.
 
 ---
 
