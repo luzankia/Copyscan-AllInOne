@@ -151,7 +151,7 @@ python hash_maintenance.py
 
 ## Local Extraction Helper (`local.py`)
 
-`local.py` is a small launcher utility for a local workflow execution: you have a folder of downloaded `.cbz` archives and want them extracted and fed straight into `main.py`, without manually unzipping each one first.
+`local.py` is a small launcher utility for a local workflow execution: you have a folder of downloaded `.cbz` archives (or already-extracted image subfolders) and want it fed straight into `main.py`, without manually unzipping each archive first.
 
 ```shell
 python local.py
@@ -160,6 +160,9 @@ python local.py
 * **Folder selection**, in order of priority: `-d/--dir <path>` on the command line; otherwise a native folder-picker dialog (via `tkinter`); if that's unavailable (no `tkinter` installed, or no display — e.g. an SSH session without X11 forwarding), it falls back to a plain text prompt. Pass `--no-gui` to skip the dialog and always use the text prompt.
 * **Smart extraction**: for each `.cbz`, detects whether the archive already has a single root folder at its top level. If so, extracts directly into the target folder (letting that root folder become the chapter folder); otherwise, creates a folder named after the archive and extracts into it.
 * On success, the original `.cbz` files are deleted and `main.py` is launched automatically against the target folder, with `--local` and `--skip-step 1 3 4 5.1 8 9` (i.e. only Renaming, Renumbering, and Compression run — the steps that make sense on already-extracted, unprocessed images).
+* **Fallback — no `.cbz` found**: if the target folder contains no archive, `local.py` looks for subfolders that already contain images (searched recursively inside each one) instead of giving up. If it finds at least one, extraction is skipped entirely — nothing is touched or deleted — and `main.py` is launched directly against the target folder with the same `--local --skip-step 1 3 4 5.1 8 9` flags as above. This covers folders you've already extracted by hand, or received pre-extracted.
+  * Which extensions count as "image" is read from `supported_extensions` in the `config.yaml` sitting next to `local.py` (same file `main.py` uses); if that config can't be read, a default list (`jpg, jpeg, png, webp, avif, bmp, gif`) is used instead.
+  * If neither a `.cbz` nor an image subfolder is found, `local.py` exits cleanly (status `0`) without launching `main.py`.
 * If any archive fails to extract, none of the `.cbz` files are deleted and `main.py` is **not** launched, so you can inspect the problem safely.
 * Exits with a non-zero status code on any extraction failure or if `main.py` itself fails, so the script can be chained in automation that checks the exit code.
 
