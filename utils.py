@@ -51,6 +51,48 @@ def find_free_port(start_port: int, host: str = '127.0.0.1', max_attempts: int =
                 port += 1
     raise RuntimeError(f"No free port found starting at {start_port} (tried {max_attempts} ports).")
 
+def resolve_web_ui_host(config: dict) -> str:
+    """Determines the bind host for the Web UI Flask servers from the optional
+    `web_ui_network_access` key in config.yaml (defaults to False, i.e.
+    localhost-only, same as before this option existed). When enabled, prints
+    a clear security warning since the interface has no authentication and
+    exposes destructive actions (deletion, merge, split) to anyone able to
+    reach the port."""
+    network_access = config.get('web_ui_network_access', False)
+
+    if not isinstance(network_access, bool):
+        console.print(
+            "[yellow]Warning: 'web_ui_network_access' must be true/false in config.yaml; "
+            "defaulting to localhost-only (127.0.0.1).[/yellow]"
+        )
+        return '127.0.0.1'
+
+    if network_access:
+        console.print(
+            "[bold red]⚠ Web UI network access is ENABLED: the server will bind to 0.0.0.0 "
+            "and be reachable from other devices on your network. There is no authentication "
+            "-- anyone who can reach this port can delete, merge, or split your files.[/bold red]"
+        )
+        return '0.0.0.0'
+
+    return '127.0.0.1'
+
+
+def get_local_ip() -> str:
+    """Best-effort guess of this machine's LAN IP address, used only to print
+    a convenient URL when the Web UI is opened to the network. Falls back to
+    '127.0.0.1' if it can't be determined (e.g. no active network interface).
+    Uses a UDP 'connect' to a public IP as a trick to learn the outbound
+    interface address -- no actual packet is sent (UDP connect is local-only)."""
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(('8.8.8.8', 80))
+        return s.getsockname()[0]
+    except Exception:
+        return '127.0.0.1'
+    finally:
+        s.close()
+
 def setup_environment(log_path, log_enabled=True):
     """Enforce UTF-8 encoding and setup logging."""
     if os.name == 'nt':

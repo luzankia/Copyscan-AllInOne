@@ -11,6 +11,10 @@ from pathlib import Path
 from rich.progress import Progress
 from rich.prompt import Prompt
 from concurrent.futures import ThreadPoolExecutor
+from utils import (
+    console, get_leaf_dirs, get_parent2_dirs, merge_directories, resolve_conflict,
+    find_free_port, resolve_keyboard_shortcuts, resolve_web_ui_host, get_local_ip
+)
 
 from utils import console, get_leaf_dirs, get_parent2_dirs, merge_directories, resolve_conflict, find_free_port, resolve_keyboard_shortcuts
 from web_ui import start_web_ui
@@ -49,21 +53,29 @@ def step_1_integrity(config):
 
     while True:
         errors = []
-        files_to_check = []
+
+        # Group files by their Leaf (chapter) folder so a single worker
+        # thread handles every image of the same chapter sequentially,
+        # instead of spawning one thread per individual file. The pool is
+        # sized by number of chapters, which scales better on chapters with
+        # thousands of pages (fewer concurrent subprocess spawns fighting
+        # over CPU/disk at the same time).
+        leaf_files = {}
         for leaf in get_leaf_dirs(root_dir, local_mode):
-            files_to_check.extend([
+            files = [
                 f for f in leaf.iterdir()
                 if f.is_file() and f.suffix.lower() in exts
-            ])
+            ]
+            if files:
+                leaf_files[leaf] = files
 
-        if not files_to_check:
+        total_files = sum(len(files) for files in leaf_files.values())
+        if total_files == 0:
             console.print("[blue]Step 1: No image files found to check.[/blue]")
             return "next"
 
-        # Function for checking a single file
         def check_single_file(file_path):
             try:
-                # Adding the "-verbose" option for ultra-strict detection
                 res = subprocess.run(
                     ["magick", "identify", "-verbose", "-regard-warnings", str(file_path)],
                     capture_output=True,
@@ -80,18 +92,28 @@ def step_1_integrity(config):
             return None
 
         with Progress(console=console) as progress:
-            task = progress.add_task("[cyan]Step 1: Checking image integrity (Strict Parallel)...", total=len(files_to_check))
-            
-            # Using ThreadPoolExecutor for parallelizing process calls
-            with ThreadPoolExecutor(max_workers=os.cpu_count()) as executor:
-                futures = [executor.submit(check_single_file, f) for f in files_to_check]
-                
-                for future in futures:
-                    result = future.result()
+            task = progress.add_task(
+                "[cyan]Step 1: Checking image integrity (one thread per chapter)...",
+                total=total_files
+            )
+
+            def check_chapter(files):
+                """Runs in a single worker thread: checks every image of one
+                chapter sequentially, so a whole chapter's pages are handled
+                without spawning a separate thread per file."""
+                chapter_errors = []
+                for f in files:
+                    result = check_single_file(f)
                     if result:
-                        errors.append(result)
+                        chapter_errors.append(result)
                     progress.advance(task)
-        
+                return chapter_errors
+
+            with ThreadPoolExecutor(max_workers=os.cpu_count()) as executor:
+                futures = [executor.submit(check_chapter, files) for files in leaf_files.values()]
+                for future in futures:
+                    errors.extend(future.result())
+
         action = handle_step_error(errors, "Step 1 (Integrity Check)", allow_rescan=True)
         if action != "rescan":
             return action
@@ -107,7 +129,7 @@ def step_2_web_ui(config):
     first_images = []
     for leaf in get_leaf_dirs(root_dir, local_mode):
         files = sorted([
-            f for f in leaf.iterdir() 
+            f for f in leaf.iterdir()
             if f.is_file() and f.suffix.lower() in exts
         ], key=lambda x: x.name)
 
@@ -126,22 +148,26 @@ def step_2_web_ui(config):
     credit_banners_path = Path(config['credit_banners_path'])
     credit_banner_threshold = config['credit_banner_threshold']
     shortcuts = resolve_keyboard_shortcuts(config)
+    host = resolve_web_ui_host(config)
+
     server_thread, completion_event = start_web_ui(
-        first_images, port, config['thumb_size'], exts, mask_popups,
+        first_images, host, port, config['thumb_size'], exts, mask_popups,
         credit_hashes_path, credit_hash_threshold,
         credit_banners_path, credit_banner_threshold,
         shortcuts
     )
-    
-    url = f"http://127.0.0.1:{port}"
-    webbrowser.open(url)
-    console.print(f"[bold green]Web UI ready. Open {url} if your browser didn't launch.[/bold green]")
+
+    local_url = f"http://127.0.0.1:{port}"
+    webbrowser.open(local_url)
+    console.print(f"[bold green]Web UI ready. Open {local_url} if your browser didn't launch.[/bold green]")
+    if host == '0.0.0.0':
+        console.print(f"[bold green]Also reachable on your network at: http://{get_local_ip()}:{port}[/bold green]")
     console.print("[yellow]Waiting for validation from Web UI...[/yellow]")
-    
+
     completion_event.wait()
     server_thread.shutdown()
     server_thread.join()
-    
+
     console.print("[bold green]✓ Web UI manual sort completed.[/bold green]")
     return "next"
 

@@ -14,9 +14,9 @@ from utils import (
 )
 
 class ServerThread(threading.Thread):
-    def __init__(self, app, port):
+    def __init__(self, app, host, port):
         threading.Thread.__init__(self)
-        self.server = make_server('127.0.0.1', port, app)
+        self.server = make_server(host, port, app, threaded=True)
         self.ctx = app.app_context()
         self.ctx.push()
 
@@ -29,7 +29,7 @@ class ServerThread(threading.Thread):
 
 TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
 
-def start_web_ui(images_list, port, thumb_size, supported_extensions, mask_popups=False,
+def start_web_ui(images_list, host, port, thumb_size, supported_extensions, mask_popups=False,
                   credit_hashes_path=None, credit_hash_threshold=8,
                   credit_banners_path=None, credit_banner_threshold=10,
                   shortcuts=None):
@@ -88,22 +88,37 @@ def start_web_ui(images_list, port, thumb_size, supported_extensions, mask_popup
         return files[0] if files else None
 
     def resequence_folder(leaf_dir, exts):
-        """Renames all valid files in a folder sequentially (001.ext, 002.ext...) to preserve order."""
+        """Renames all valid files in a folder sequentially (001.ext, 002.ext...) to
+        preserve order. Skips the two-phase rename entirely when the folder is
+        already in that exact state, to avoid needless disk I/O and mtime churn
+        on every delete/merge/split call even when the numbering didn't change."""
         files = sorted([
-            f for f in leaf_dir.iterdir() 
+            f for f in leaf_dir.iterdir()
             if f.is_file() and f.suffix.lower() in exts and not f.name.startswith("fus-")
         ], key=get_natural_key)
-        
+
+        if not files:
+            return
+
+        # Already sequential? Compare each file's current name against its
+        # expected "NNN.ext" target -- if everything matches, nothing to do.
+        already_sequential = all(
+            f.name == f"{str(i + 1).zfill(3)}{f.suffix}"
+            for i, f in enumerate(files)
+        )
+        if already_sequential:
+            return
+
         # Step 1: Temporary rename to prevent overwriting conflicts
         temp_files = []
         for i, f in enumerate(files):
             tmp_path = f.with_name(f"__temp_seq_{i}{f.suffix}")
             f.rename(tmp_path)
             temp_files.append(tmp_path)
-            
+
         # Step 2: Final rename to 001.ext, 002.ext, etc.
         for i, f in enumerate(temp_files):
-            final_name = f"{str(i+1).zfill(3)}{f.suffix}"
+            final_name = f"{str(i + 1).zfill(3)}{f.suffix}"
             f.rename(f.with_name(final_name))
 
     # --- FLASK ROUTES ---
@@ -552,7 +567,7 @@ def start_web_ui(images_list, port, thumb_size, supported_extensions, mask_popup
     # --- SERVER LAUNCH ---
     # We start the server thread here. 
     # workflow.py will open the browser, wait for event and stop the thread.
-    server_thread = ServerThread(app, port)
+    server_thread = ServerThread(app, host, port)
     server_thread.start()
     
     return server_thread, completion_event

@@ -19,6 +19,14 @@ import threading
 import uuid
 import webbrowser
 from pathlib import Path
+from utils import (
+    console, load_credit_hashes, save_credit_hashes,
+    load_credit_banners, save_credit_banners,
+    compute_phash, is_known_credit_hash, find_redundant_clusters,
+    compute_banner_slice_hash, find_free_port, resolve_project_path,
+    resolve_web_ui_host, get_local_ip,
+    DEFAULT_KEYBOARD_SHORTCUTS
+)
 
 import yaml
 from flask import Flask, render_template, request, jsonify, send_file
@@ -57,6 +65,7 @@ def load_settings(config_path, cli_args) -> dict:
         'credit_hash_threshold': cli_args.credit_hash_threshold or config.get('credit_hash_threshold', 8),
         'credit_banner_threshold': cli_args.credit_banner_threshold or config.get('credit_banner_threshold', 16),
         'port': cli_args.port or config.get('web_port', 5051),
+        'web_ui_network_access': cli_args.network or bool(config.get('web_ui_network_access', False)),
     }
 
     missing = [k for k in ('credit_hashes_path', 'credit_banners_path') if not settings[k]]
@@ -273,6 +282,9 @@ def main():
                         help="Preferred port (default: web_port in config.yaml, else 5051). "
                              "If busy, the next free port is used automatically.")
     parser.add_argument('--no-browser', action='store_true', help="Don't auto-open a browser tab")
+    parser.add_argument('--network', action='store_true',
+                        help="Force network access (bind to 0.0.0.0), overriding "
+                            "config.yaml's web_ui_network_access setting.")
     args = parser.parse_args()
 
     settings = load_settings(args.config, args)
@@ -297,18 +309,22 @@ def main():
     )
     console.print(f"[cyan]Loaded:[/cyan] {len(load_credit_hashes(credit_hashes_path))} credit page hash(es), "
                   f"{sum(len(v) for v in load_credit_banners(credit_banners_path).values())} banner hash(es)")
+    
+    host = resolve_web_ui_host({'web_ui_network_access': settings['web_ui_network_access']})
 
     port = find_free_port(settings['port'])
     if port != settings['port']:
         console.print(f"[yellow]Port {settings['port']} is busy, using {port} instead.[/yellow]")
     url = f"http://127.0.0.1:{port}"
     console.print(f"[bold green]Credit Hash Maintenance running at {url}[/bold green]")
+    if host == '0.0.0.0':
+        console.print(f"[bold green]Also reachable on your network at: http://{get_local_ip()}:{port}[/bold green]")
     console.print("[yellow]Press Ctrl+C to stop.[/yellow]")
 
     if not args.no_browser:
         threading.Timer(0.7, lambda: webbrowser.open(url)).start()
 
-    server = make_server('127.0.0.1', port, app)
+    server = make_server(host, port, app, threaded=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

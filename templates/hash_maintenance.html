@@ -78,7 +78,7 @@
             <tbody id="tbody-{{ section.bucket }}">
                 {% for row in section.rows %}
                 <tr class="{{ 'cluster-boundary' if row.is_first_in_cluster else '' }} {{ 'redundant' if row.cluster_size > 1 else '' }}">
-                    <td><input type="checkbox" class="row-check" data-bucket="{{ section.bucket }}" data-hash="{{ row.hash }}" data-first-in-cluster="{{ 'true' if row.is_first_in_cluster else 'false' }}"></td>
+                    <td><input type="checkbox" class="row-check" autocomplete="off" data-bucket="{{ section.bucket }}" data-hash="{{ row.hash }}" data-first-in-cluster="{{ 'true' if row.is_first_in_cluster else 'false' }}"></td>
                     <td>{{ loop.index }}</td>
                     <td class="hash-cell">{{ row.hash }}</td>
                     <td>
