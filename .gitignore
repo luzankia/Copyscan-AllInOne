@@ -234,3 +234,6 @@ credit_hashes.json
 # Copyscan-AllInOne: personal embedded credit-banner hash database (grows locally over time).
 # Use credit_banners.example.json as model.
 credit_banners.json
+
+# Copyscan-AllInOne: recycle bin for Step 2 deletions/cuts/merges
+trash/

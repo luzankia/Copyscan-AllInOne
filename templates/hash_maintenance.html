@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Credit Hash Maintenance</title>
     <style>
         body { font-family: 'Segoe UI', Arial, sans-serif; background: #121212; color: #fff; margin: 0; padding: 20px; }
@@ -34,6 +35,15 @@
         .drop-zone { border: 2px dashed #444; border-radius: 8px; padding: 30px; text-align: center; color: #999; cursor: pointer; transition: 0.2s; }
         .drop-zone:hover, .drop-zone.dragover { border-color: #38bdf8; color: #38bdf8; background: rgba(56, 189, 248, 0.05); }
         .drop-zone input[type=file] { display: none; }
+
+        /* --- Mobile: minimal touch (this is a standalone review tool, mostly
+           used at a desk) -- the viewport fix above already makes it readable;
+           we just avoid the table overflowing the screen edge. */
+        @media (max-width: 640px) {
+            body { padding: 12px; }
+            table { display: block; overflow-x: auto; white-space: nowrap; }
+            .btn { padding: 10px 16px; }
+        }
     </style>
 </head>
 <body>

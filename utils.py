@@ -6,6 +6,8 @@ import logging
 import re
 import json
 import socket
+import uuid
+from datetime import datetime
 from pathlib import Path
 from rich.console import Console
 from rich.prompt import Prompt
@@ -92,7 +94,6 @@ def get_local_ip() -> str:
         return '127.0.0.1'
     finally:
         s.close()
-
 def setup_environment(log_path, log_enabled=True):
     """Enforce UTF-8 encoding and setup logging."""
     if os.name == 'nt':
@@ -402,7 +403,11 @@ def crop_remove_banner(image_path: Path, cut_percent: float, remove_side: str):
     - remove_side='bottom': removes everything BELOW the marker (rows marker..end),
       keeps everything above.
     Overwrites image_path with the remaining content, and returns the phash (hex
-    string) of the removed slice, or None on failure."""
+    string) of the removed slice, or None on failure.
+
+    NOTE: this overwrites image_path in place. Callers that want the pre-crop
+    version recoverable (see web_ui.py's /api_remove_banner) must back it up
+    to the trash themselves BEFORE calling this."""
     try:
         img = Image.open(image_path)
         img.load()
@@ -539,3 +544,175 @@ def find_redundant_clusters(hash_list: list, threshold: int):
         groups.setdefault(find(i), []).append(i)
 
     return list(groups.values()), dist_matrix
+
+
+# ---------------------------------------------------------------------------
+# Trash / Corbeille
+#
+# Every interactive deletion made during Step 2 (manual delete, credit-page
+# deletion, the original image consumed by a split, the two halves consumed
+# by a merge, the pre-crop original consumed by a banner removal) goes
+# through send_to_trash() instead of Path.unlink(). Nothing is permanently
+# lost until the trash itself is purged -- either manually from the /trash
+# web page, or automatically at the very start of the NEXT Step 2 run (see
+# workflow.step_2_web_ui), which keeps the trash from growing unbounded
+# across sessions while still giving the user a full session to notice and
+# undo a mistake.
+#
+# A JSON manifest (trash_index.json, inside trash_dir) tracks each trashed
+# file's original absolute path, why it was trashed, and when, so a restore
+# can put it back exactly where it came from.
+# ---------------------------------------------------------------------------
+
+TRASH_INDEX_FILENAME = "trash_index.json"
+
+# Human-readable labels for the internal reason codes, used by the /trash
+# web page. Keep in sync with the reason strings passed to send_to_trash()
+# throughout web_ui.py.
+TRASH_REASON_LABELS = {
+    "manual_delete": "Deleted manually",
+    "credit_page": "Deleted as credit page",
+    "split_original": "Original before split",
+    "merge_source": "Merged into another page",
+    "merge_rejected": "Rejected merge result",
+    "banner_crop_source": "Original before banner crop",
+}
+
+def load_trash_index(trash_dir: Path) -> list:
+    """Load the trash manifest. Returns an empty list if trash_dir or the
+    index file doesn't exist yet, or is unreadable."""
+    index_path = trash_dir / TRASH_INDEX_FILENAME
+    if not index_path.exists():
+        return []
+    try:
+        with open(index_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        return data if isinstance(data, list) else []
+    except Exception as e:
+        logging.error(f"Failed to load trash index from {index_path}: {e}")
+        return []
+
+def save_trash_index(trash_dir: Path, entries: list):
+    """Persist the trash manifest."""
+    index_path = trash_dir / TRASH_INDEX_FILENAME
+    try:
+        trash_dir.mkdir(parents=True, exist_ok=True)
+        with open(index_path, 'w', encoding='utf-8') as f:
+            json.dump(entries, f, indent=2, ensure_ascii=False)
+    except Exception as e:
+        logging.error(f"Failed to save trash index to {index_path}: {e}")
+
+def _generate_trash_name(original_path: Path) -> str:
+    """Builds a unique trash filename that still ends in the original
+    extension (so served thumbnails keep working) while avoiding collisions
+    between same-named files from different chapters."""
+    timestamp = datetime.now().strftime('%Y%m%d-%H%M%S')
+    unique = uuid.uuid4().hex[:8]
+    return f"{timestamp}_{unique}_{original_path.name}"
+
+def send_to_trash(file_path: Path, trash_dir: Path, reason: str, mode: str = "move") -> bool:
+    """Moves (mode='move', the default) or copies (mode='copy') file_path
+    into trash_dir and records it in the manifest so it can be restored later.
+
+    mode='copy' is for operations that overwrite a file in place (e.g. banner
+    cropping): the original content needs a backup in the trash *before* the
+    overwrite happens, while file_path itself must still exist afterward for
+    the caller to write the new content into.
+
+    Returns True on success. On failure, file_path is left completely
+    untouched (shutil.move/copy either succeeds or raises without partially
+    deleting the source) -- so a failed trash attempt never means data loss,
+    it just means the caller should treat it like any other failed delete."""
+    try:
+        trash_dir.mkdir(parents=True, exist_ok=True)
+        trash_name = _generate_trash_name(file_path)
+        trash_path = trash_dir / trash_name
+
+        if mode == "copy":
+            shutil.copy2(str(file_path), str(trash_path))
+        else:
+            shutil.move(str(file_path), str(trash_path))
+
+        index = load_trash_index(trash_dir)
+        index.append({
+            "trash_name": trash_name,
+            "original_path": str(file_path.resolve()),
+            "reason": reason,
+            "deleted_at": datetime.now().isoformat(timespec='seconds'),
+        })
+        save_trash_index(trash_dir, index)
+        logging.info(f"Trashed ({reason}, {mode}): {file_path} -> {trash_name}")
+        return True
+    except Exception as e:
+        logging.error(f"Failed to send {file_path} to trash: {e}")
+        return False
+
+def restore_from_trash(trash_name: str, trash_dir: Path):
+    """Restores one trashed file back to its recorded original location.
+    If the original folder no longer exists (renamed/moved/deleted since),
+    it's recreated. If a file already sits at the exact original path, the
+    restored file is given a conflict-safe name instead of overwriting it.
+    Returns (success: bool, message: str) -- message is either the restored
+    path (on success) or a human-readable reason (on failure)."""
+    index = load_trash_index(trash_dir)
+    entry = next((e for e in index if e.get('trash_name') == trash_name), None)
+    if entry is None:
+        return False, "Trash entry not found in the index."
+
+    trash_path = trash_dir / trash_name
+    if not trash_path.exists():
+        # Manifest references a file that's no longer physically there
+        # (manually removed from disk?) -- drop the stale entry so it stops
+        # showing up in the /trash page.
+        save_trash_index(trash_dir, [e for e in index if e.get('trash_name') != trash_name])
+        return False, "File missing from the trash folder (index entry removed)."
+
+    original_path = Path(entry['original_path'])
+    try:
+        original_path.parent.mkdir(parents=True, exist_ok=True)
+        target_path = original_path
+        if target_path.exists():
+            target_path = resolve_conflict(target_path, is_file=True)
+        shutil.move(str(trash_path), str(target_path))
+    except Exception as e:
+        logging.error(f"Failed to restore {trash_name} from trash: {e}")
+        return False, f"Restore failed: {e}"
+
+    save_trash_index(trash_dir, [e for e in index if e.get('trash_name') != trash_name])
+    logging.info(f"Restored from trash: {trash_name} -> {target_path}")
+    return True, str(target_path)
+
+def purge_trash(trash_dir: Path) -> int:
+    """Permanently empties the trash (files + manifest). Safe to call when
+    trash_dir doesn't exist yet (first run). Returns the number of files
+    actually removed, for a console/UI summary."""
+    if not trash_dir.exists():
+        return 0
+
+    index = load_trash_index(trash_dir)
+    count = 0
+    for entry in index:
+        trash_path = trash_dir / entry.get('trash_name', '')
+        try:
+            if trash_path.exists():
+                trash_path.unlink()
+                count += 1
+        except Exception as e:
+            logging.error(f"Failed to purge trashed file {trash_path}: {e}")
+
+    # Defensive sweep: also remove any file physically present in trash_dir
+    # but missing from the manifest (e.g. after a manual index edit).
+    try:
+        for f in trash_dir.iterdir():
+            if f.is_file() and f.name != TRASH_INDEX_FILENAME:
+                try:
+                    f.unlink()
+                    count += 1
+                except Exception as e:
+                    logging.error(f"Failed to purge orphan trash file {f}: {e}")
+    except Exception:
+        pass
+
+    save_trash_index(trash_dir, [])
+    logging.info(f"Trash purged: {count} file(s) permanently removed.")
+    return count

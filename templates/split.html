@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Split Image Studio</title>
     <style>
         body { font-family: 'Segoe UI', Arial, sans-serif; background: #121212; color: #fff; margin: 0; padding: 0; display: flex; flex-direction: column; height: 100vh; }
@@ -32,13 +33,37 @@
         .image-container { position: relative; box-shadow: 0 0 20px rgba(0,0,0,0.8); cursor: crosshair; transform-origin: top center; transition: width 0.2s; width: 100%; max-width: 800px; }
         .image-container img { width: 100%; display: block; user-select: none; pointer-events: none; }
 
-        .marker-h { position: absolute; left: 0; width: 100%; height: 16px; margin-top: -8px; z-index: 10; cursor: ns-resize; }
-        .marker-v { position: absolute; top: 0; height: 100%; width: 16px; margin-left: -8px; z-index: 10; cursor: ew-resize; }
-        .marker-h-line { position: absolute; top: 7px; left: 0; width: 100%; height: 2px; background: #ef4444; box-shadow: 0 0 5px #000; pointer-events: none; }
-        .marker-v-line { position: absolute; left: 7px; top: 0; height: 100%; width: 2px; background: #3b82f6; box-shadow: 0 0 5px #000; pointer-events: none; }
+        /* Marker hit strips: 40px tall/wide (was 16px) so a fingertip can grab
+           them reliably. The thin colored line stays centered for precision;
+           the water-drop handle (below) is what the user actually sees/taps. */
+        .marker-h { position: absolute; left: 0; width: 100%; height: 40px; margin-top: -20px; z-index: 10; cursor: ns-resize; touch-action: none; }
+        .marker-v { position: absolute; top: 0; height: 100%; width: 40px; margin-left: -20px; z-index: 10; cursor: ew-resize; touch-action: none; }
+        .marker-h-line { position: absolute; top: 19px; left: 0; width: 100%; height: 2px; background: #ef4444; box-shadow: 0 0 5px #000; pointer-events: none; }
+        .marker-v-line { position: absolute; left: 19px; top: 0; height: 100%; width: 2px; background: #3b82f6; box-shadow: 0 0 5px #000; pointer-events: none; }
         .marker-h.suggested .marker-h-line { background: #38bdf8; }
         .marker-h:hover .marker-h-line, .marker-h.dragging .marker-h-line { height: 3px; box-shadow: 0 0 8px #fff; }
         .marker-v:hover .marker-v-line, .marker-v.dragging .marker-v-line { width: 3px; box-shadow: 0 0 8px #fff; }
+
+        /* "Goutte d'eau" : la pointe touche exactement le trait de découpe,
+           le bulbe déborde dans la marge du workspace pour ne jamais cacher
+           l'image. border-radius asymétrique + rotation = forme de larme. */
+        .marker-drop { position: absolute; width: 32px; height: 32px; background: #ef4444; border-radius: 50% 50% 50% 0; box-shadow: 0 2px 6px rgba(0, 0, 0, 0.6); pointer-events: none; transition: filter 0.15s ease; }
+        .marker-h .marker-drop { left: 0; top: 50%; transform: translate(-62%, -50%) rotate(-135deg); }
+        .marker-v .marker-drop { top: 0; left: 50%; transform: translate(-50%, -62%) rotate(-45deg); }
+        .marker-h.suggested .marker-drop { background: #38bdf8; }
+        .marker-h:hover .marker-drop, .marker-h.dragging .marker-drop { filter: drop-shadow(0 0 6px #fff); }
+        .marker-v:hover .marker-drop, .marker-v.dragging .marker-drop { filter: drop-shadow(0 0 6px #fff); }
+        .marker-h.dragging .marker-drop { transform: translate(-62%, -50%) rotate(-135deg) scale(1.15); }
+        .marker-v.dragging .marker-drop { transform: translate(-50%, -62%) rotate(-45deg) scale(1.15); }
+
+        /* --- Mobile --- */
+        @media (max-width: 640px) {
+            .toolbar-title small { display: none; } /* keyboard hint is meaningless without a keyboard */
+            .controls { justify-content: center; }
+            .btn { flex: 1 1 110px; width: auto; height: 46px; font-size: 12px; }
+            .tb-divider { display: none; }
+            .workspace { padding: 34px 16px 34px 30px; }
+        }
     </style>
 </head>
 <body>
@@ -75,7 +100,7 @@
         </div>
         <div class="toolbar-title">
             <h3>✂️ Image Split Studio</h3>
-            <small style="color:#aaa;">Click anywhere to place a marker; drag an existing marker to fine-tune its position.{% if context != 'maintenance' %} Press <strong>{{ shortcuts.execute_split }}</strong> to execute the split.{% endif %}</small>
+            <small style="color:#aaa;">Tap/click anywhere to place a marker; drag a marker to fine-tune it; double-tap (or double-click) a marker to remove it.{% if context != 'maintenance' %} Press <strong>{{ shortcuts.execute_split }}</strong> to execute the split.{% endif %}</small>
         </div>
         <div id="hash-info" style="display:none; margin-top:8px; background:#0f2733; border:1px solid #38bdf8; padding:8px 12px; border-radius:6px; font-size:12px; color:#7dd3fc; align-items:center; gap:10px;">
             <span>📎 Marker pre-placed from a known banner hash: <code id="hash-value" style="color:#fff;"></code></span>
@@ -121,6 +146,39 @@
 
         let draggingMarker = null; // { type: 'h'|'v', index: number, element: HTMLElement }
 
+        // Unifies mouse and touch events so the drag logic only needs one code
+        // path -- touchmove/touchend hand us `touches`/`changedTouches` instead
+        // of clientX/clientY directly on the event.
+        function getPointerCoords(e) {
+            if (e.touches && e.touches.length) {
+                return { x: e.touches[0].clientX, y: e.touches[0].clientY };
+            }
+            if (e.changedTouches && e.changedTouches.length) {
+                return { x: e.changedTouches[0].clientX, y: e.changedTouches[0].clientY };
+            }
+            return { x: e.clientX, y: e.clientY };
+        }
+
+        // Removes one cut from the given array and redraws every marker from
+        // cutsH/cutsV, keeping dataset.index in sync with the arrays.
+        // Trade-off: a marker's "suggested" (banner auto-detection) styling
+        // is not preserved through a rebuild -- purely cosmetic, the cut
+        // position/value itself is unaffected.
+        function removeMarkerAt(type, index) {
+            if (type === 'h') {
+                cutsH.splice(index, 1);
+            } else {
+                cutsV.splice(index, 1);
+            }
+            rebuildMarkers();
+        }
+
+        function rebuildMarkers() {
+            document.getElementById('markers-layer').innerHTML = '';
+            cutsH.forEach((pct, i) => createMarker('h', pct, i));
+            cutsV.forEach((pct, i) => createMarker('v', pct, i));
+        }
+
         function createMarker(type, percent, index, suggested = false) {
             const marker = document.createElement('div');
             marker.className = 'marker-' + type + (suggested ? ' suggested' : '');
@@ -135,25 +193,58 @@
             line.className = 'marker-' + type + '-line';
             marker.appendChild(line);
 
-            marker.addEventListener('mousedown', (e) => {
+            // "Goutte d'eau" handle -- purely visual, the whole 40px marker
+            // strip is the actual draggable hit area (see CSS .marker-h/.marker-v).
+            const drop = document.createElement('div');
+            drop.className = 'marker-drop';
+            marker.appendChild(drop);
+
+            const startDrag = (e) => {
                 e.stopPropagation();
                 e.preventDefault();
                 draggingMarker = { type, index: parseInt(marker.dataset.index, 10), element: marker };
                 marker.classList.add('dragging');
-            });
-            // Prevent a plain click on an existing marker from also placing a new one.
+            };
+
+            marker.addEventListener('mousedown', startDrag);
+            marker.addEventListener('touchstart', startDrag, { passive: false });
+            // Prevent a plain click/tap on an existing marker from also placing a new one.
             marker.addEventListener('click', (e) => e.stopPropagation());
+
+            // Double-click (mouse) / double-tap (touch) removes the marker.
+            const removeThisMarker = (e) => {
+                e.stopPropagation();
+                e.preventDefault();
+                if (!confirmAction("Remove this cut line?")) return;
+                const t = marker.classList.contains('marker-h') ? 'h' : 'v';
+                removeMarkerAt(t, parseInt(marker.dataset.index, 10));
+            };
+            marker.addEventListener('dblclick', removeThisMarker);
+
+            // dblclick isn't reliably synthesized from taps on all mobile
+            // browsers (some interpret a fast double-tap as a zoom gesture
+            // instead), so double-tap is also detected manually per marker.
+            let lastTapTime = 0;
+            marker.addEventListener('touchend', (e) => {
+                const now = Date.now();
+                if (now - lastTapTime < 300) {
+                    removeThisMarker(e);
+                }
+                lastTapTime = now;
+            });
 
             document.getElementById('markers-layer').appendChild(marker);
             return marker;
         }
 
-        document.addEventListener('mousemove', (e) => {
+        function handleDragMove(e) {
             if (!draggingMarker) return;
+            e.preventDefault(); // also stops the page from scrolling/pinch-zooming mid-drag on touch
+            const { x, y } = getPointerCoords(e);
             const rect = document.getElementById('img-container').getBoundingClientRect();
             let percent = draggingMarker.type === 'h'
-                ? ((e.clientY - rect.top) / rect.height) * 100
-                : ((e.clientX - rect.left) / rect.width) * 100;
+                ? ((y - rect.top) / rect.height) * 100
+                : ((x - rect.left) / rect.width) * 100;
             percent = Math.max(0.5, Math.min(99.5, percent));
 
             if (draggingMarker.type === 'h') {
@@ -163,14 +254,20 @@
                 draggingMarker.element.style.left = percent + '%';
                 cutsV[draggingMarker.index] = percent;
             }
-        });
+        }
 
-        document.addEventListener('mouseup', () => {
+        function handleDragEnd() {
             if (draggingMarker) {
                 draggingMarker.element.classList.remove('dragging');
                 draggingMarker = null;
             }
-        });
+        }
+
+        document.addEventListener('mousemove', handleDragMove);
+        document.addEventListener('mouseup', handleDragEnd);
+        document.addEventListener('touchmove', handleDragMove, { passive: false });
+        document.addEventListener('touchend', handleDragEnd);
+        document.addEventListener('touchcancel', handleDragEnd);
 
         window.addEventListener('DOMContentLoaded', () => {
             if (suggestPct !== null) {

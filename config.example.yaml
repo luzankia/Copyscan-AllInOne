@@ -10,7 +10,7 @@ credit_hashes_path: "C:\\Path\\To\\Your\\Project\\credit_hashes.json"
 credit_hash_threshold: 8  # Max perceptual-hash distance (0-64) to consider a page a known credit page
 credit_banners_path: "C:\\Path\\To\\Your\\Project\\credit_banners.json"
 credit_banner_threshold: 16  # Max perceptual-hash distance (0-64) for embedded top/bottom banner detection
-integrity_engine: "imagemagick" # imagemagick or pyav
+trash_dir: "C:\\Path\\To\\Your\\Project\\trash"  # Recycle bin for every deletion/cut/merge made in the Step 2 Web UI 
 
 # Supported extension in the workflow
 supported_extensions:
@@ -25,8 +25,9 @@ supported_extensions:
 # Timing & Ports
 sleep_time: 1
 im_timeout: 20
+web_port: 5002  # Shared by the main Web UI and the standalone hash_maintenance.py tool.
+                # If already taken (e.g. both running at once), the next free port is used automatically.
 web_ui_network_access: false
-web_port: 5002  # Shared by the main Web UI and the standalone hash_maintenance.py tool. If already taken, the next free port is used automatically.
 thumb_size: "220px"
 
 # Workflow Steps Activation
@@ -44,7 +45,8 @@ steps_active:
 # Security Configurations
 mask_security_popups: false
 
-# Chapter Editor / Split Studio keyboard shortcuts.
+# Chapter Editor / Split Studio keyboard shortcuts 
+# https://developer.mozilla.org/en-US/docs/Web/API/UI_Events/Keyboard_event_key_values
 keyboard_shortcuts:
   prev_chapter: "ArrowLeft"
   next_chapter: "ArrowRight"

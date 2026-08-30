@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Manual Image Sorting</title>
     <style>
         body { font-family: 'Segoe UI', Arial, sans-serif; background: #121212; color: #fff; margin: 0; padding: 20px; }
@@ -9,29 +10,55 @@
         .gallery { display: flex; flex-wrap: wrap; gap: 20px; justify-content: center; margin-top: 20px; }
 
         .card { position: relative; cursor: pointer; border: 4px solid transparent; border-radius: 8px; transition: 0.2s; background: #222; text-align: center; width: {{ thumb_size }}; }
-        .card-label { padding: 6px; font-size: 11px; background: #1a1a1a; color: #aaa; word-break: break-all; border-bottom-left-radius: 4px; border-bottom-right-radius: 4px; }
+
+        /* Card label now shows the REAL chapter/serie/site instead of a
+           generic placeholder -- on touch devices there is no :hover, so the
+           tooltip below is never seen; this is the only reliably visible
+           identification of what a thumbnail actually is. */
+        .card-label { padding: 6px 8px; background: #1a1a1a; word-break: break-word; border-bottom-left-radius: 4px; border-bottom-right-radius: 4px; }
+        .label-main { font-size: 12px; color: #eee; font-weight: bold; }
+        .label-sub { font-size: 10.5px; color: #999; margin-top: 2px; }
 
         .credit-tag { position: absolute; top: 6px; left: 6px; background: #f59e0b; color: #1a1a1a; padding: 3px 7px; border-radius: 4px; font-size: 11px; font-weight: bold; z-index: 10; }
 
         img { width: 100%; height: auto; max-height: 400px; display: block; object-fit: contain; border-top-left-radius: 4px; border-top-right-radius: 4px; }
 
-        .edit-icon { position: absolute; top: 6px; right: 6px; background: rgba(0, 0, 0, 0.8); padding: 5px; border-radius: 5px; cursor: pointer; z-index: 10; color: #fff; font-size: 16px; transition: 0.2s; border: 1px solid #444; line-height: 1; }
+        .edit-icon { position: absolute; top: 6px; right: 6px; background: rgba(0, 0, 0, 0.8); padding: 5px; border-radius: 5px; cursor: pointer; z-index: 10; color: #fff; font-size: 16px; transition: 0.2s; border: 1px solid #444; line-height: 1; width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; box-sizing: content-box; }
         .edit-icon:hover { background: #3b82f6; border-color: #60a5fa; transform: scale(1.1); }
 
+        /* Tooltip kept as a bonus for desktop hover (redundant with the
+           label now, but harmless). */
         .tooltip { position: absolute; bottom: -20px; left: 50%; transform: translateX(-50%); background: rgba(0, 0, 0, 0.95); color: #fff; padding: 12px; border-radius: 6px; font-size: 13px; white-space: nowrap; opacity: 0; transition: all 0.2s ease; pointer-events: none; z-index: 9999; border: 1px solid #555; box-shadow: 0 4px 10px rgba(0,0,0,0.5); text-align: left; }
         .card:hover .tooltip { opacity: 1; bottom: 35px; }
 
         .btn { background: #ef4444; color: white; padding: 12px 24px; border: none; border-radius: 5px; cursor: pointer; font-size: 15px; font-weight: bold; transition: 0.2s; }
+        .btn.secondary { background: #4b5563; }
         .btn:hover { opacity: 0.9; }
+
+        /* --- Mobile --- */
+        @media (max-width: 640px) {
+            body { padding: 12px; }
+            .header { flex-direction: column; align-items: stretch; gap: 12px; }
+            .header .actions { justify-content: stretch; flex-direction: column; }
+            .header .actions .btn { width: 100%; height: 48px; font-size: 15px; }
+            .gallery { gap: 14px; margin-top: 16px; }
+            .card { width: calc(50% - 14px) !important; max-width: 220px; }
+            .edit-icon { width: 30px; height: 30px; font-size: 18px; }
+            .credit-tag { font-size: 12px; padding: 4px 8px; }
+        }
+        @media (max-width: 400px) {
+            .card { width: 100% !important; max-width: 320px; }
+        }
     </style>
 </head>
 <body>
     <div class="header">
         <div>
             <h2 style="margin:0;">Manual Sort & Advanced Editing</h2>
-            <p style="margin:5px 0 0 0; color:#aaa;">Click a chapter to open it in the merge/split/delete tool, then validate below when done.</p>
+            <p style="margin:5px 0 0 0; color:#aaa;">Tap a chapter to open it in the merge/split/delete tool, then validate below when done.</p>
         </div>
         <div class="actions" style="display:flex; gap:10px;">
+            <button class="btn secondary" onclick="window.location.href='/trash'">🗑 Trash ({{ trash_count }})</button>
             <button class="btn" onclick="validateAndContinue()">Validate & Continue</button>
         </div>
     </div>
@@ -42,7 +69,10 @@
                 <div class="edit-icon" title="Open leaf folder manager">✏️</div>
                 {% if item.is_credit_match %}<div class="credit-tag" title="Matches a known credit page">Known credit</div>{% endif %}
                 <img src="/image/{{ item.b64 }}" loading="lazy" />
-                <div class="card-label">Leaf Preview</div>
+                <div class="card-label">
+                    <div class="label-main">{{ item.chapter }}</div>
+                    <div class="label-sub">{{ item.serie }} · {{ item.site }}</div>
+                </div>
                 <div class="tooltip">
                     <strong>Chapter:</strong> {{ item.chapter }}<br>
                     <strong>Serie:</strong> {{ item.serie }}<br>

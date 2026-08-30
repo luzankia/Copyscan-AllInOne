@@ -13,10 +13,9 @@ from rich.prompt import Prompt
 from concurrent.futures import ThreadPoolExecutor
 from utils import (
     console, get_leaf_dirs, get_parent2_dirs, merge_directories, resolve_conflict,
-    find_free_port, resolve_keyboard_shortcuts, resolve_web_ui_host, get_local_ip
-)
-
-from utils import console, get_leaf_dirs, get_parent2_dirs, merge_directories, resolve_conflict, find_free_port, resolve_keyboard_shortcuts
+    find_free_port, resolve_keyboard_shortcuts, resolve_web_ui_host, get_local_ip,
+    purge_trash
+)      
 from web_ui import start_web_ui
 
 def handle_step_error(errors, step_name, allow_rescan=False) -> str:
@@ -74,8 +73,10 @@ def step_1_integrity(config):
             console.print("[blue]Step 1: No image files found to check.[/blue]")
             return "next"
 
+                                             
         def check_single_file(file_path):
             try:
+                                                                         
                 res = subprocess.run(
                     ["magick", "identify", "-verbose", "-regard-warnings", str(file_path)],
                     capture_output=True,
@@ -117,7 +118,6 @@ def step_1_integrity(config):
         action = handle_step_error(errors, "Step 1 (Integrity Check)", allow_rescan=True)
         if action != "rescan":
             return action
-
 def step_2_web_ui(config):
     root_dir = Path(config['root_dir'])
     port = find_free_port(config['web_port'])
@@ -129,7 +129,7 @@ def step_2_web_ui(config):
     first_images = []
     for leaf in get_leaf_dirs(root_dir, local_mode):
         files = sorted([
-            f for f in leaf.iterdir()
+            f for f in leaf.iterdir() 
             if f.is_file() and f.suffix.lower() in exts
         ], key=lambda x: x.name)
 
@@ -140,6 +140,16 @@ def step_2_web_ui(config):
         console.print("[blue]Step 2: No images found for Web UI.[/blue]")
         return "next"
 
+    # Trash is purged at the very start of every Step 2 run: it only ever
+    # holds items deleted/cut/merged during a Step 2 session, and by the time
+    # the NEXT Step 2 starts, that previous session is long over -- so this
+    # is the right moment to reclaim the space without risking anything the
+    # user might still want to recover.
+    trash_dir = Path(config['trash_dir'])
+    purged_count = purge_trash(trash_dir)
+    if purged_count:
+        console.print(f"[yellow]Trash purged before Step 2: {purged_count} file(s) from the previous session permanently removed.[/yellow]")
+
     console.print(f"[cyan]Step 2: Starting Web Server[/cyan]")
 
     mask_popups = config.get('mask_security_popups', False)
@@ -148,26 +158,25 @@ def step_2_web_ui(config):
     credit_banners_path = Path(config['credit_banners_path'])
     credit_banner_threshold = config['credit_banner_threshold']
     shortcuts = resolve_keyboard_shortcuts(config)
-    host = resolve_web_ui_host(config)
-
+    host = resolve_web_ui_host(config)                                                               
     server_thread, completion_event = start_web_ui(
         first_images, host, port, config['thumb_size'], exts, mask_popups,
         credit_hashes_path, credit_hash_threshold,
         credit_banners_path, credit_banner_threshold,
-        shortcuts
+        shortcuts, trash_dir
     )
-
-    local_url = f"http://127.0.0.1:{port}"
-    webbrowser.open(local_url)
-    console.print(f"[bold green]Web UI ready. Open {local_url} if your browser didn't launch.[/bold green]")
+    
+    url = f"http://127.0.0.1:{port}"
+    webbrowser.open(url)
+    console.print(f"[bold green]Web UI ready. Open {url} if your browser didn't launch.[/bold green]")
     if host == '0.0.0.0':
         console.print(f"[bold green]Also reachable on your network at: http://{get_local_ip()}:{port}[/bold green]")
-    console.print("[yellow]Waiting for validation from Web UI...[/yellow]")
-
+        console.print("[yellow]Waiting for validation from Web UI...[/yellow]")
+    
     completion_event.wait()
     server_thread.shutdown()
     server_thread.join()
-
+    
     console.print("[bold green]✓ Web UI manual sort completed.[/bold green]")
     return "next"
 

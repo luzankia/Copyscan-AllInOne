@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{{ title }}</title>
     <style>
         body { font-family: 'Segoe UI', Arial, sans-serif; background: #121212; color: #fff; margin: 0; padding: 20px; }
@@ -54,6 +55,9 @@
         .btn.warn { background: #f59e0b; color: #1a1a1a; }
         .btn:hover { opacity: 0.85; }
         .btn:disabled { opacity: 0.35; cursor: not-allowed; }
+        /* Visual "ON" state for the Auto-next toggle -- same treatment split.html
+           uses for its Horizontal/Vertical mode buttons. */
+        .btn.active { box-shadow: 0 0 0 3px #10b981; }
         .tb-divider { width: 2px; height: 32px; background: #444; margin: 0 4px; }
         .zoom-label { min-width: 45px; text-align: center; }
 
@@ -61,6 +65,23 @@
         .help-icon:hover { background: #4b5563; }
         .help-tooltip { position: absolute; top: 52px; right: 0; width: 240px; background: rgba(0, 0, 0, 0.95); color: #fff; padding: 10px 14px; border-radius: 6px; font-size: 12px; line-height: 1.5; text-align: left; opacity: 0; pointer-events: none; transition: 0.2s; border: 1px solid #555; box-shadow: 0 4px 10px rgba(0,0,0,0.5); z-index: 2000; }
         .help-icon:hover .help-tooltip { opacity: 1; }
+        /* :hover doesn't exist on touch -- tapping toggles this class instead (see JS below). */
+        .help-icon.show-tooltip .help-tooltip { opacity: 1; pointer-events: auto; }
+
+        /* --- Mobile --- */
+        @media (max-width: 640px) {
+            body { padding: 12px; }
+            .toolbar-row { justify-content: center; }
+            .btn { flex: 1 1 130px; width: auto; height: 46px; font-size: 12.5px; }
+            .tb-divider { display: none; }
+            .card { width: calc(50% - 12px) !important; max-width: 220px; }
+            .split-icon { width: 30px; height: 30px; font-size: 18px; }
+            .help-icon { width: 46px; height: 46px; }
+            .help-tooltip { right: auto; left: 50%; transform: translateX(-50%); width: 220px; }
+        }
+        @media (max-width: 400px) {
+            .card { width: 100% !important; max-width: 320px; }
+        }
     </style>
 </head>
 <body>
@@ -79,15 +100,19 @@
                 <div class="tb-divider"></div>
                 <button class="btn warn" id="btn-remember-credit" onclick="handleCreditClick(event)">🧠 Remember Credit</button>
                 <div class="tb-divider"></div>
+                <button class="btn secondary" id="btn-auto-next" onclick="toggleAutoNext()" title="No Shift key on mobile: turn this on to make Delete / Remember Credit / Validate always jump to the next chapter afterward.">⏭ Auto-next: OFF</button>
+                <div class="tb-divider"></div>
                 <div class="help-icon">?
-                    <div class="help-tooltip"><strong>{{ shortcuts.merge_pairs }}</strong> = Merge Pairs. Hold <strong>Shift</strong> while clicking <strong>Delete Selection</strong> or <strong>Remember Credit</strong> — or use <strong>Shift+{{ shortcuts.delete_selection }}</strong> / <strong>Shift+{{ shortcuts.remember_credit }}</strong> — to also jump to the next chapter afterward.</div>
+                    <div class="help-tooltip"><strong>{{ shortcuts.merge_pairs }}</strong> = Merge Pairs. Hold <strong>Shift</strong> while clicking <strong>Delete Selection</strong> or <strong>Remember Credit</strong> — or use <strong>Shift+{{ shortcuts.delete_selection }}</strong> / <strong>Shift+{{ shortcuts.remember_credit }}</strong>, or turn on <strong>Auto-next</strong> — to also jump to the next chapter afterward.</div>
                 </div>
             {% else %}
                 <button class="btn secondary" onclick="cancelMerges()">Cancel Merges</button>
                 <button class="btn success" id="btn-validate-merges" onclick="handleValidateClick(event)">Validate Merges</button>
                 <div class="tb-divider"></div>
+                <button class="btn secondary" id="btn-auto-next" onclick="toggleAutoNext()" title="No Shift key on mobile: turn this on to make Validate always jump to the next chapter afterward.">⏭ Auto-next: OFF</button>
+                <div class="tb-divider"></div>
                 <div class="help-icon">?
-                    <div class="help-tooltip"><strong>{{ shortcuts.validate_merges }}</strong> = Validate Merges. Hold <strong>Shift</strong> while clicking (or use <strong>Shift+{{ shortcuts.validate_merges }}</strong>) to also jump to the next chapter afterward.</div>
+                    <div class="help-tooltip"><strong>{{ shortcuts.validate_merges }}</strong> = Validate Merges. Hold <strong>Shift</strong> while clicking (or use <strong>Shift+{{ shortcuts.validate_merges }}</strong>, or turn on <strong>Auto-next</strong>) to also jump to the next chapter afterward.</div>
                 </div>
             {% endif %}
         </div>
@@ -111,7 +136,7 @@
                         <div class="select-veil"></div>
                     </div>
                     <div class="card-label">{{ item.display_name }}</div>
-                    <div class="tooltip">
+					<div class="tooltip">
                         <strong>Chapter:</strong> {{ item.chapter }}<br>
                         <strong>Serie:</strong> {{ item.serie }}<br>
                         <strong>Site:</strong> {{ item.site }}
@@ -121,7 +146,7 @@
                 <div class="card approved" id="card-{{ item.b64 }}" data-b64="{{ item.b64 }}" onclick="toggleReject('{{ item.b64 }}')">
                     <img src="/image/{{ item.b64 }}" loading="lazy" />
                     <div class="card-label">{{ item.display_name }}</div>
-                    <div class="tooltip">
+					<div class="tooltip">
                         <strong>Chapter:</strong> {{ item.chapter }}<br>
                         <strong>Serie:</strong> {{ item.serie }}<br>
                         <strong>Site:</strong> {{ item.site }}
@@ -155,17 +180,38 @@
             if (key) KEY_TO_ACTION[key.toLowerCase()] = action;
         });
 
+        // "Auto-next" toggle: mobile has no Shift key, so this is the touch
+        // equivalent of Shift+click, persisted across chapter navigations
+        // (each Prev/Next is a full page load) via localStorage.
+        const AUTO_NEXT_KEY = 'copyscan_auto_next';
+        let autoNext = localStorage.getItem(AUTO_NEXT_KEY) === '1';
+
+        function updateAutoNextButton() {
+            const btn = document.getElementById('btn-auto-next');
+            if (!btn) return;
+            btn.textContent = autoNext ? '⏭ Auto-next: ON' : '⏭ Auto-next: OFF';
+            btn.classList.toggle('active', autoNext);
+        }
+
+        function toggleAutoNext() {
+            autoNext = !autoNext;
+            localStorage.setItem(AUTO_NEXT_KEY, autoNext ? '1' : '0');
+            updateAutoNextButton();
+            refreshActionLabels(false);
+        }
+
         // On the last chapter there is no next_url: fall back to the main page.
         function goNextChapter() {
             window.location.href = NEXT_URL || '/';
         }
 
         // Delete Selection and Remember Credit are single buttons that behave
-        // differently while Shift is held (mouse click or keyboard shortcut) —
-        // see handleDeleteClick/handleCreditClick and the keydown handler below,
-        // plus updateShiftLabels() for the "& ⏭" label swap.
+        // differently while Shift is held (mouse click or keyboard shortcut),
+        // or when the Auto-next toggle is on (mobile) — see
+        // handleDeleteClick/handleCreditClick and the keydown handler below,
+        // plus updateShiftLabels()/refreshActionLabels() for the "& ⏭" label swap.
         function handleDeleteClick(e) {
-            if (e.shiftKey) {
+            if (e.shiftKey || autoNext) {
                 deleteSelectionAndNext();
             } else {
                 submitSelection('delete');
@@ -173,11 +219,11 @@
         }
 
         function handleCreditClick(e) {
-            markAsCredit(e.shiftKey);
+            markAsCredit(e.shiftKey || autoNext);
         }
 
         function handleValidateClick(e) {
-            submitValidation(e.shiftKey);
+            submitValidation(e.shiftKey || autoNext);
         }
 
         let selected = [];
@@ -340,9 +386,9 @@
         // Keyboard shortcuts. Bindings come from config.yaml's `keyboard_shortcuts`
         // section (see SHORTCUTS/KEY_TO_ACTION above) -- prev_chapter/next_chapter
         // work in both phases, delete_selection/remember_credit/merge_pairs are
-        // phase 1 only, validate_merges is phase 2 only. Shift on delete_selection /
-        // remember_credit / validate_merges is fixed behavior (jump to next chapter
-        // afterward), not a separate binding.
+        // phase 1 only, validate_merges is phase 2 only. Shift (or Auto-next) on
+        // delete_selection/remember_credit/validate_merges jumps to the next
+        // chapter afterward.
         document.addEventListener('keydown', function (e) {
             if (e.ctrlKey || e.altKey || e.metaKey) return;
             const tag = document.activeElement ? document.activeElement.tagName : '';
@@ -363,7 +409,7 @@
                 case 'delete_selection':
                     if (PHASE === 1) {
                         e.preventDefault();
-                        if (e.shiftKey) {
+                        if (e.shiftKey || autoNext) {
                             deleteSelectionAndNext();
                         } else {
                             submitSelection('delete');
@@ -373,7 +419,7 @@
                 case 'remember_credit':
                     if (PHASE === 1) {
                         e.preventDefault();
-                        markAsCredit(e.shiftKey);
+                        markAsCredit(e.shiftKey || autoNext);
                     }
                     break;
                 case 'merge_pairs':
@@ -385,18 +431,19 @@
                 case 'validate_merges':
                     if (PHASE === 2) {
                         e.preventDefault();
-                        submitValidation(e.shiftKey);
+                        submitValidation(e.shiftKey || autoNext);
                     }
                     break;
             }
         });
 
-        // Label swap: while Shift is held, Delete Selection / Remember Credit
-        // (phase 1) and Validate Merges (phase 2) show a trailing "& ⏭" so it's
-        // clear the "and jump to next chapter" variant is armed — for both the
-        // keyboard shortcuts and a Shift-click. Button width is fixed in CSS,
-        // so this never shifts the layout. getElementById returns null for
-        // buttons that don't exist in the current phase, which is fine.
+        // Label swap: while Shift is held (or Auto-next is on), Delete Selection /
+        // Remember Credit (phase 1) and Validate Merges (phase 2) show a trailing
+        // "& ⏭" so it's clear the "and jump to next chapter" variant is armed —
+        // for keyboard shortcuts, Shift-click, and the Auto-next toggle alike.
+        // Button width is fixed in CSS, so this never shifts the layout.
+        // getElementById returns null for buttons that don't exist in the
+        // current phase, which is fine.
         const SHIFT_SUFFIX = ' & ⏭';
         const SHIFT_LABEL_BUTTONS = [
             { id: 'btn-delete-selection', base: 'Delete Selection' },
@@ -404,21 +451,41 @@
             { id: 'btn-validate-merges', base: 'Validate Merges' }
         ];
 
-        function updateShiftLabels(isShift) {
+        function updateShiftLabels(showSuffix) {
             SHIFT_LABEL_BUTTONS.forEach(({ id, base }) => {
                 const btn = document.getElementById(id);
-                if (btn) btn.textContent = base + (isShift ? SHIFT_SUFFIX : '');
+                if (btn) btn.textContent = base + (showSuffix ? SHIFT_SUFFIX : '');
             });
         }
 
+        function refreshActionLabels(shiftHeld) {
+            updateShiftLabels(shiftHeld || autoNext);
+        }
+
         document.addEventListener('keydown', function (e) {
-            if (e.key === 'Shift') updateShiftLabels(true);
+            if (e.key === 'Shift') refreshActionLabels(true);
         });
         document.addEventListener('keyup', function (e) {
-            if (e.key === 'Shift') updateShiftLabels(false);
+            if (e.key === 'Shift') refreshActionLabels(false);
         });
         // Alt-tabbing away while Shift is held would otherwise leave the labels stuck.
-        window.addEventListener('blur', function () { updateShiftLabels(false); });
+        window.addEventListener('blur', function () { refreshActionLabels(false); });
+
+        // Touch/tap has no :hover, so the "?" help bubble is otherwise dead
+        // weight on mobile -- tap to toggle it instead, tap elsewhere to close.
+        document.querySelectorAll('.help-icon').forEach(icon => {
+            icon.addEventListener('click', (e) => {
+                e.stopPropagation();
+                icon.classList.toggle('show-tooltip');
+            });
+        });
+        document.addEventListener('click', () => {
+            document.querySelectorAll('.help-icon.show-tooltip').forEach(i => i.classList.remove('show-tooltip'));
+        });
+
+        // Reflect the persisted Auto-next preference immediately on page load.
+        updateAutoNextButton();
+        refreshActionLabels(false);
     </script>
 </body>
 </html>

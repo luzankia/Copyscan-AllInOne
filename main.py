@@ -37,6 +37,7 @@ REQUIRED_CONFIG_KEYS = {
     "credit_hash_threshold": int,
     "credit_banners_path": str,
     "credit_banner_threshold": int,
+    "trash_dir": str,
 }
 
 def load_config(config_path="config.yaml"):
@@ -119,7 +120,7 @@ def apply_cli_args(config, args):
 # folders that may live on a different drive entirely).
 PROJECT_PATH_KEYS = [
     "csv_1_path", "csv_2_path", "log_path",
-    "credit_hashes_path", "credit_banners_path",
+    "credit_hashes_path", "credit_banners_path", "trash_dir",
 ]
 
 def resolve_project_paths(config):
@@ -191,9 +192,9 @@ if __name__ == "__main__":
     # 3. Apply command line arguments if present
     config = apply_cli_args(config, args)
 
-    # 3b. Resolve project-relative paths (csv/log/credit-hash files) against
-    # this script's own directory, so relative values in config.yaml work
-    # regardless of the launch cwd.
+    # 3b. Resolve project-relative paths (csv/log/credit-hash/trash files)
+    # against this script's own directory, so relative values in config.yaml
+    # work regardless of the launch cwd.
     config = resolve_project_paths(config)
 
     # 4. Initialize the environment (logging, encoding)

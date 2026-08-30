@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>🗑 Trash</title>
+    <style>
+        body { font-family: 'Segoe UI', Arial, sans-serif; background: #121212; color: #fff; margin: 0; padding: 20px; }
+        .header { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; position: sticky; top: 0; background: #1a1a1a; padding: 15px; z-index: 1000; border-bottom: 2px solid #333; border-radius: 8px; }
+        .header h2 { margin: 0; }
+        .header p { margin: 5px 0 0 0; color: #aaa; font-size: 13px; }
+        .toolbar-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; row-gap: 10px; justify-content: flex-end; }
+
+        .btn { color: white; border: none; border-radius: 5px; cursor: pointer; font-size: 13px; font-weight: bold; transition: 0.2s; height: 42px; padding: 0 16px; box-sizing: border-box; }
+        .btn.primary { background: #3b82f6; }
+        .btn.secondary { background: #4b5563; }
+        .btn.danger { background: #ef4444; }
+        .btn.success { background: #10b981; }
+        .btn:hover { opacity: 0.85; }
+        .btn:disabled { opacity: 0.35; cursor: not-allowed; }
+
+        .empty-msg { text-align: center; color: #777; font-style: italic; margin-top: 60px; font-size: 15px; }
+
+        .gallery { display: flex; flex-wrap: wrap; gap: 20px; justify-content: center; margin-top: 20px; }
+        .card { position: relative; cursor: pointer; border: 4px solid transparent; border-radius: 8px; transition: 0.2s; background: #222; text-align: center; width: {{ thumb_size }}; }
+        .card.selected { border-color: #10b981; box-shadow: 0 0 12px #10b981; }
+
+        .img-wrap { position: relative; }
+        .select-veil { position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: rgba(16, 185, 129, 0.3); opacity: 0; pointer-events: none; transition: 0.2s; border-top-left-radius: 4px; border-top-right-radius: 4px; }
+        .card.selected .select-veil { opacity: 1; }
+
+        img { width: 100%; height: auto; max-height: 400px; display: block; object-fit: contain; border-top-left-radius: 4px; border-top-right-radius: 4px; }
+
+        .reason-tag { position: absolute; top: 6px; left: 6px; background: #f59e0b; color: #1a1a1a; padding: 3px 7px; border-radius: 4px; font-size: 10.5px; font-weight: bold; z-index: 10; max-width: calc(100% - 12px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+        .card-label { padding: 6px 8px; background: #1a1a1a; word-break: break-word; border-bottom-left-radius: 4px; border-bottom-right-radius: 4px; }
+        .label-main { font-size: 12px; color: #eee; font-weight: bold; }
+        .label-sub { font-size: 10.5px; color: #999; margin-top: 2px; }
+
+        /* --- Mobile --- */
+        @media (max-width: 640px) {
+            body { padding: 12px; }
+            .header { flex-direction: column; align-items: stretch; }
+            .toolbar-row { justify-content: center; }
+            .btn { flex: 1 1 130px; height: 46px; }
+            .gallery { gap: 14px; margin-top: 16px; }
+            .card { width: calc(50% - 14px) !important; max-width: 220px; }
+        }
+        @media (max-width: 400px) {
+            .card { width: 100% !important; max-width: 320px; }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div>
+            <h2>🗑 Trash</h2>
+            <p>Tap an item to select it, then Restore -- or Purge to permanently empty the trash. Auto-purged at the start of every Step 2 run.</p>
+        </div>
+        <div class="toolbar-row">
+            <button class="btn secondary" onclick="window.location.href='/'">← Back to main</button>
+            {% if entries %}
+                <button class="btn secondary" onclick="selectAll()">Select All</button>
+                <button class="btn secondary" onclick="deselectAll()">Deselect All</button>
+                <button class="btn success" onclick="restoreSelected()">🔄 Restore Selected</button>
+                <button class="btn danger" onclick="purgeTrash()">🗑️ Purge Trash</button>
+            {% endif %}
+        </div>
+    </div>
+
+    {% if entries %}
+    <div class="gallery">
+        {% for item in entries %}
+            <div class="card" id="card-{{ item.trash_name }}" data-trash-name="{{ item.trash_name }}" onclick="toggleSelect('{{ item.trash_name }}')">
+                <div class="reason-tag" title="{{ item.reason_label }}">{{ item.reason_label }}</div>
+                <div class="img-wrap">
+                    <img src="/trash_image/{{ item.trash_name }}" loading="lazy" />
+                    <div class="select-veil"></div>
+                </div>
+                <div class="card-label">
+                    <div class="label-main">{{ item.file_name }}</div>
+                    <div class="label-sub">{{ item.leaf_name }} · {{ item.deleted_at }}</div>
+                </div>
+            </div>
+        {% endfor %}
+    </div>
+    {% else %}
+        <p class="empty-msg">🗑️ Trash is empty.</p>
+    {% endif %}
+
+    <script>
+        const MASK_POPUPS = {{ 'true' if mask_popups else 'false' }};
+        function confirmAction(msg) {
+            if (MASK_POPUPS) return true;
+            return confirm(msg);
+        }
+        function alertMsg(msg) {
+            if (MASK_POPUPS) { console.log(msg); return; }
+            alert(msg);
+        }
+
+        let selected = [];
+
+        function toggleSelect(trashName) {
+            const el = document.getElementById('card-' + trashName);
+            el.classList.toggle('selected');
+            if (selected.includes(trashName)) {
+                selected = selected.filter(id => id !== trashName);
+            } else {
+                selected.push(trashName);
+            }
+        }
+
+        function selectAll() {
+            selected = [];
+            document.querySelectorAll('.card').forEach(card => {
+                card.classList.add('selected');
+                selected.push(card.getAttribute('data-trash-name'));
+            });
+        }
+
+        function deselectAll() {
+            document.querySelectorAll('.card').forEach(card => card.classList.remove('selected'));
+            selected = [];
+        }
+
+        function restoreSelected() {
+            if (selected.length === 0) {
+                alertMsg("Select at least one item to restore.");
+                return;
+            }
+            if (!confirmAction("Restore " + selected.length + " item(s) to their original location?")) return;
+
+            fetch('/trash_restore', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({selected: selected})
+            }).then(res => res.json()).then(data => {
+                const failed = (data.results || []).filter(r => !r.ok);
+                if (failed.length > 0) {
+                    alertMsg(failed.length + " item(s) could not be restored:\n" + failed.map(f => f.message).join("\n"));
+                }
+                window.location.reload();
+            });
+        }
+
+        function purgeTrash() {
+            if (!confirmAction("Permanently delete EVERYTHING in the trash? This cannot be undone.")) return;
+            fetch('/trash_purge', { method: 'POST' })
+                .then(res => res.json())
+                .then(data => {
+                    alertMsg(data.purged + " file(s) permanently removed.");
+                    window.location.reload();
+                });
+        }
+    </script>
+</body>
+</html>

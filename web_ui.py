@@ -10,7 +10,8 @@ from PIL import Image
 from utils import (
     load_credit_hashes, save_credit_hashes, compute_phash, is_known_credit_hash,
     load_credit_banners, save_credit_banners, suggest_banner_cut, crop_remove_banner,
-    natural_sort_key as get_natural_key, DEFAULT_KEYBOARD_SHORTCUTS
+    natural_sort_key as get_natural_key, DEFAULT_KEYBOARD_SHORTCUTS,
+    send_to_trash, load_trash_index, restore_from_trash, purge_trash, TRASH_REASON_LABELS
 )
 
 class ServerThread(threading.Thread):
@@ -32,11 +33,17 @@ TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
 def start_web_ui(images_list, host, port, thumb_size, supported_extensions, mask_popups=False,
                   credit_hashes_path=None, credit_hash_threshold=8,
                   credit_banners_path=None, credit_banner_threshold=10,
-                  shortcuts=None):
+                  shortcuts=None, trash_dir=None):
     """Starts the Flask server for manual sorting, merging, and image splitting."""
     app = Flask(__name__, template_folder=str(TEMPLATES_DIR))
     completion_event = threading.Event()
     shortcuts = shortcuts or DEFAULT_KEYBOARD_SHORTCUTS
+
+    # Defensive fallback: workflow.py always resolves and passes trash_dir
+    # from config.yaml's required `trash_dir` key, so this should never
+    # actually trigger -- but a Web UI that can't delete anything safely is
+    # worse than one that keeps working with a sane default location.
+    trash_dir = Path(trash_dir) if trash_dir else Path(__file__).resolve().parent / "trash"
     
     # Shared registries within the server instance
     path_map = {}
@@ -88,15 +95,12 @@ def start_web_ui(images_list, host, port, thumb_size, supported_extensions, mask
         return files[0] if files else None
 
     def resequence_folder(leaf_dir, exts):
-        """Renames all valid files in a folder sequentially (001.ext, 002.ext...) to
-        preserve order. Skips the two-phase rename entirely when the folder is
-        already in that exact state, to avoid needless disk I/O and mtime churn
-        on every delete/merge/split call even when the numbering didn't change."""
+        """Renames all valid files in a folder sequentially (001.ext, 002.ext...) to preserve order."""
         files = sorted([
-            f for f in leaf_dir.iterdir()
+            f for f in leaf_dir.iterdir() 
             if f.is_file() and f.suffix.lower() in exts and not f.name.startswith("fus-")
         ], key=get_natural_key)
-
+        
         if not files:
             return
 
@@ -108,17 +112,16 @@ def start_web_ui(images_list, host, port, thumb_size, supported_extensions, mask
         )
         if already_sequential:
             return
-
         # Step 1: Temporary rename to prevent overwriting conflicts
         temp_files = []
         for i, f in enumerate(files):
             tmp_path = f.with_name(f"__temp_seq_{i}{f.suffix}")
             f.rename(tmp_path)
             temp_files.append(tmp_path)
-
+            
         # Step 2: Final rename to 001.ext, 002.ext, etc.
         for i, f in enumerate(temp_files):
-            final_name = f"{str(i + 1).zfill(3)}{f.suffix}"
+            final_name = f"{str(i+1).zfill(3)}{f.suffix}"
             f.rename(f.with_name(final_name))
 
     # --- FLASK ROUTES ---
@@ -144,7 +147,10 @@ def start_web_ui(images_list, host, port, thumb_size, supported_extensions, mask
                 'site': site_dir.name if site_dir else "Unknown",
                 'is_credit_match': check_credit_match(current_first)
             })
-        return render_template('main.html', images=main_images_data, thumb_size=thumb_size, mask_popups=mask_popups)
+
+        trash_count = len(load_trash_index(trash_dir))
+        return render_template('main.html', images=main_images_data, thumb_size=thumb_size,
+                                mask_popups=mask_popups, trash_count=trash_count)
 
     @app.route('/image/<b64_path>')
     def serve_image(b64_path):
@@ -165,23 +171,21 @@ def start_web_ui(images_list, host, port, thumb_size, supported_extensions, mask
         for b64 in to_delete_b64:
             file_to_del = path_map.get(b64)
             if file_to_del:
-                try:
-                    # INDEPENDENT MANAGEMENT: Safety check if already deleted via edit tab
-                    if file_to_del.exists():
-                        file_to_del.unlink()
-                        logging.info(f"Web UI Deleted: {file_to_del}")
+                # INDEPENDENT MANAGEMENT: Safety check if already deleted via edit tab
+                if file_to_del.exists():
+                    if send_to_trash(file_to_del, trash_dir, "manual_delete"):
+                        logging.info(f"Web UI Trashed: {file_to_del}")
                     else:
-                        logging.info(f"Web UI Delete skipped (Already deleted via edit tab): {file_to_del}")
-                except Exception as e:
-                    errors.append(str(file_to_del))
-                    logging.error(f"Failed to delete {file_to_del}: {e}")
+                        errors.append(str(file_to_del))
+                else:
+                    logging.info(f"Web UI Delete skipped (Already deleted via edit tab): {file_to_del}")
                     
         completion_event.set()
         return jsonify({"status": "ok", "errors": errors})
 
     @app.route('/mark_credit', methods=['POST'])
     def mark_credit():
-        """Deletes the selected images and remembers their perceptual hash as a
+        """Trashes the selected images and remembers their perceptual hash as a
         known 'credit page', so future chapters with the same image are
         pre-flagged for deletion automatically (still requiring user validation)."""
         data = request.json
@@ -199,12 +203,10 @@ def start_web_ui(images_list, host, port, thumb_size, supported_extensions, mask
                 known_credit_hashes.append(img_hash)
                 learned += 1
 
-            try:
-                file_path.unlink()
-                logging.info(f"Marked as credit page and deleted: {file_path}")
-            except Exception as e:
+            if send_to_trash(file_path, trash_dir, "credit_page"):
+                logging.info(f"Marked as credit page and trashed: {file_path}")
+            else:
                 errors.append(str(file_path))
-                logging.error(f"Failed to delete marked credit page {file_path}: {e}")
 
         if learned and credit_hashes_path:
             save_credit_hashes(credit_hashes_path, known_credit_hashes)
@@ -383,7 +385,10 @@ def start_web_ui(images_list, host, port, thumb_size, supported_extensions, mask
     @app.route('/api_remove_banner', methods=['POST'])
     def api_remove_banner():
         """Crops out a marked top/bottom slice (embedded credit banner) from a
-        single image in place, and remembers its hash for future auto-suggestion."""
+        single image in place, and remembers its hash for future auto-suggestion.
+        The pre-crop original is backed up (copied, not moved -- the file must
+        still exist for crop_remove_banner to overwrite) to the trash first, so
+        the crop can be undone via /trash if it's placed wrong."""
         data = request.json
         b64 = data.get('b64')
         cut_percent = data.get('cut_percent')
@@ -400,6 +405,12 @@ def start_web_ui(images_list, host, port, thumb_size, supported_extensions, mask
             return jsonify({"status": "error", "message": "Invalid cut position."})
         if not (0 < cut_percent < 100):
             return jsonify({"status": "error", "message": "Cut position out of range."})
+
+        # Back up the pre-crop original before touching the real file. If the
+        # backup fails, refuse the crop entirely rather than lose the discarded
+        # slice permanently.
+        if not send_to_trash(target_path, trash_dir, "banner_crop_source", mode="copy"):
+            return jsonify({"status": "error", "message": "Could not back up the original image to the trash; crop aborted to avoid data loss."})
 
         banner_hash = crop_remove_banner(target_path, cut_percent, remove_side)
         if banner_hash is None:
@@ -457,8 +468,13 @@ def start_web_ui(images_list, host, port, thumb_size, supported_extensions, mask
                             cropped.save(leaf_dir / temp_name)
                             part_counter += 1
                             
-            # Remove original file safely
-            target_path.unlink()
+            # Move the original to the trash instead of deleting it outright,
+            # so it can be recovered from /trash if the split cuts were wrong.
+            # The split pieces are already saved at this point -- if the trash
+            # move fails, we deliberately leave the original in place (rather
+            # than losing it) and surface the error instead of resequencing.
+            if not send_to_trash(target_path, trash_dir, "split_original"):
+                return jsonify({"status": "error", "message": "Split pieces were saved, but moving the original to the trash failed; the original was left in place to avoid data loss."})
             
             # Reprocess all files inside the folder to ensure logical sequencing without conflict
             resequence_folder(leaf_dir, supported_extensions)
@@ -477,11 +493,10 @@ def start_web_ui(images_list, host, port, thumb_size, supported_extensions, mask
         for b64 in selected_b64s:
             file_to_del = path_map.get(b64)
             if file_to_del and file_to_del.exists():
-                try:
-                    file_to_del.unlink()
-                    logging.info(f"Editor Tab Deleted: {file_to_del}")
-                except Exception as e:
-                    logging.error(f"Failed to delete {file_to_del} from editor tab: {e}")
+                if send_to_trash(file_to_del, trash_dir, "manual_delete"):
+                    logging.info(f"Editor Tab Trashed: {file_to_del}")
+                else:
+                    logging.error(f"Failed to trash {file_to_del} from editor tab")
         return jsonify({"status": "ok"})
 
     @app.route('/edit_merge', methods=['POST'])
@@ -546,11 +561,18 @@ def start_web_ui(images_list, host, port, thumb_size, supported_extensions, mask
             b_path = info['bottom_path']
             
             if m_b64 in rejected_b64s:
-                if m_path.exists(): m_path.unlink()
+                # Rejected: the fused result itself is the discardable piece --
+                # top_path/bottom_path are untouched and still on disk.
+                if m_path.exists():
+                    send_to_trash(m_path, trash_dir, "merge_rejected")
             else:
                 try:
-                    if t_path.exists(): t_path.unlink()
-                    if b_path.exists(): b_path.unlink()
+                    # Accepted: the two originals are what's now "cut away" --
+                    # everything the user might want back after a bad merge.
+                    if t_path.exists():
+                        send_to_trash(t_path, trash_dir, "merge_source")
+                    if b_path.exists():
+                        send_to_trash(b_path, trash_dir, "merge_source")
                     
                     if m_path.name.startswith("fus-"):
                         new_name = m_path.name[4:]
@@ -563,6 +585,56 @@ def start_web_ui(images_list, host, port, thumb_size, supported_extensions, mask
             PENDING_MERGES.pop(m_b64, None)
             
         return jsonify({"status": "ok"})
+
+    # --- TRASH / CORBEILLE ROUTES ---
+    @app.route('/trash')
+    def trash_page():
+        index = load_trash_index(trash_dir)
+        # Most recently trashed first.
+        index_sorted = sorted(index, key=lambda e: e.get('deleted_at', ''), reverse=True)
+
+        entries = []
+        for e in index_sorted:
+            original = Path(e.get('original_path', ''))
+            reason = e.get('reason', '')
+            entries.append({
+                'trash_name': e.get('trash_name', ''),
+                'file_name': original.name,
+                'leaf_name': original.parent.name if original.parent else '',
+                'reason_label': TRASH_REASON_LABELS.get(reason, reason or 'Unknown'),
+                'deleted_at': e.get('deleted_at', ''),
+            })
+
+        return render_template('trash.html', entries=entries, thumb_size=thumb_size, mask_popups=mask_popups)
+
+    @app.route('/trash_image/<trash_name>')
+    def trash_image(trash_name):
+        # Only serve names present in the manifest -- guards against path
+        # traversal via a crafted trash_name in the URL.
+        index = load_trash_index(trash_dir)
+        if not any(e.get('trash_name') == trash_name for e in index):
+            return "Not found", 404
+        trash_path = trash_dir / trash_name
+        if trash_path.exists():
+            return send_file(str(trash_path))
+        return "Image not found", 404
+
+    @app.route('/trash_restore', methods=['POST'])
+    def trash_restore():
+        data = request.json or {}
+        selected = data.get('selected', [])
+
+        results = []
+        for trash_name in selected:
+            ok, message = restore_from_trash(trash_name, trash_dir)
+            results.append({'trash_name': trash_name, 'ok': ok, 'message': message})
+
+        return jsonify({"status": "ok", "results": results})
+
+    @app.route('/trash_purge', methods=['POST'])
+    def trash_purge():
+        count = purge_trash(trash_dir)
+        return jsonify({"status": "ok", "purged": count})
 
     # --- SERVER LAUNCH ---
     # We start the server thread here. 
