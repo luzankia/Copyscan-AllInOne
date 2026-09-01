@@ -32,20 +32,13 @@ def resolve_project_path(path_str: str, base_dir: Path) -> str:
 
 def find_free_port(start_port: int, host: str = '127.0.0.1', max_attempts: int = 50) -> int:
     """Returns the first available TCP port at or after start_port, found by
-    attempting to bind a socket. Lets multiple tools share a single configured
-    port: the first one to start takes it, subsequent ones automatically move
-    to the next free port instead of failing on a collision.
-
-    Deliberately does NOT set SO_REUSEADDR on the test socket: on Windows,
-    that flag lets a bind() succeed even when another process already holds
-    the port, making the availability check unreliable (two tools could both
-    "detect" the port as free and collide). A plain bind() gives an accurate,
-    exclusive test on both Windows and Linux.
-
+    attempting to bind a socket. 
     Raises RuntimeError if no free port is found within max_attempts."""
     port = start_port
     for _ in range(max_attempts):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            if os.name == 'nt':
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
             try:
                 s.bind((host, port))
                 return port
@@ -496,6 +489,30 @@ def is_known_credit_hash(image_hash_hex: str, known_hashes: list, threshold: int
         return False
     distances = np.count_nonzero(matrix != candidate, axis=1)
     return bool(distances.min() <= threshold)
+
+def find_known_credit_match(image_hash_hex: str, known_hashes: list, threshold: int):
+    """Like is_known_credit_hash(), but returns the specific known hash (hex
+    string) that matched within `threshold`, instead of just a bool. Used
+    whenever the caller needs to know exactly WHICH database entry produced
+    the match -- e.g. so the Web UI can offer a one-click "delete this hash"
+    action directly on a false-positive "Known credit" tag, without the user
+    having to hunt for it manually in the Hash Maintenance tool.
+
+    Returns None if there's no match within threshold, or on any error."""
+    if not image_hash_hex or not known_hashes:
+        return None
+    try:
+        candidate = imagehash.hex_to_hash(image_hash_hex).hash.flatten()
+    except Exception:
+        return None
+    matrix = _stack_hashes(known_hashes)
+    if matrix is None:
+        return None
+    distances = np.count_nonzero(matrix != candidate, axis=1)
+    best_idx = int(distances.argmin())
+    if distances[best_idx] <= threshold:
+        return known_hashes[best_idx]
+    return None
 
 def find_redundant_clusters(hash_list: list, threshold: int):
     """Groups the indices of hash_list into clusters using single-linkage

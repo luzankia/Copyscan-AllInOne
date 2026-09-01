@@ -4,15 +4,18 @@ import logging
 import re
 from pathlib import Path
 from flask import Flask, render_template, request, jsonify, send_file
-from werkzeug.serving import make_server
+from werkzeug.serving import make_server, BaseWSGIServer
 from PIL import Image
 
 from utils import (
     load_credit_hashes, save_credit_hashes, compute_phash, is_known_credit_hash,
+    find_known_credit_match,
     load_credit_banners, save_credit_banners, suggest_banner_cut, crop_remove_banner,
     natural_sort_key as get_natural_key, DEFAULT_KEYBOARD_SHORTCUTS,
     send_to_trash, load_trash_index, restore_from_trash, purge_trash, TRASH_REASON_LABELS
 )
+
+BaseWSGIServer.allow_reuse_address = False
 
 class ServerThread(threading.Thread):
     def __init__(self, app, host, port):
@@ -33,7 +36,8 @@ TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
 def start_web_ui(images_list, host, port, thumb_size, supported_extensions, mask_popups=False,
                   credit_hashes_path=None, credit_hash_threshold=8,
                   credit_banners_path=None, credit_banner_threshold=10,
-                  shortcuts=None, trash_dir=None):
+                  shortcuts=None, trash_dir=None, mobile_mini_mode=False):
+    
     """Starts the Flask server for manual sorting, merging, and image splitting."""
     app = Flask(__name__, template_folder=str(TEMPLATES_DIR))
     completion_event = threading.Event()
@@ -59,9 +63,15 @@ def start_web_ui(images_list, host, port, thumb_size, supported_extensions, mask
     known_banners = load_credit_banners(credit_banners_path) if credit_banners_path else {"top": [], "bottom": []}
 
     def check_credit_match(file_path):
-        """Returns True if file_path's perceptual hash matches a known credit page."""
+        """Returns the known credit-page hash (hex string) that file_path's
+        perceptual hash matches within credit_hash_threshold, or None if it
+        doesn't match anything. Callers wanting a plain bool should compare
+        the result to None -- this is deliberately not a bool return so the
+        Web UI can offer a "delete this exact hash" action on a match."""
         img_hash = compute_phash(file_path)
-        return is_known_credit_hash(img_hash, known_credit_hashes, credit_hash_threshold)
+        if img_hash is None:
+            return None
+        return find_known_credit_match(img_hash, known_credit_hashes, credit_hash_threshold)
 
     def check_banner_suggestion(file_path, position):
         """Returns a (cut_pct, matched_hash) tuple if file_path looks like it contains
@@ -145,7 +155,7 @@ def start_web_ui(images_list, host, port, thumb_size, supported_extensions, mask
                 'chapter': leaf_dir.name,
                 'serie': serie_dir.name if serie_dir else "Unknown",
                 'site': site_dir.name if site_dir else "Unknown",
-                'is_credit_match': check_credit_match(current_first)
+                'is_credit_match': check_credit_match(current_first) is not None
             })
 
         trash_count = len(load_trash_index(trash_dir))
@@ -212,6 +222,27 @@ def start_web_ui(images_list, host, port, thumb_size, supported_extensions, mask
             save_credit_hashes(credit_hashes_path, known_credit_hashes)
 
         return jsonify({"status": "ok", "errors": errors, "learned": learned})
+
+    @app.route('/api_delete_credit_hash', methods=['POST'])
+    def api_delete_credit_hash():
+        """Removes a single hash from the known credit-page database (e.g. when
+        a 'Known credit' tag turns out to be a false positive). Mirrors
+        /api_delete_banner_hash below, for the whole-page credit database
+        instead of the top/bottom banner ones."""
+        data = request.json or {}
+        hash_value = data.get('hash')
+
+        if not hash_value:
+            return jsonify({"status": "error", "message": "Missing hash."})
+
+        if hash_value not in known_credit_hashes:
+            return jsonify({"status": "ok", "removed": False})
+
+        known_credit_hashes.remove(hash_value)
+        if credit_hashes_path:
+            save_credit_hashes(credit_hashes_path, known_credit_hashes)
+        logging.info(f"Removed credit-page hash from database: {hash_value}")
+        return jsonify({"status": "ok", "removed": True})
 
     @app.route('/edit/<main_b64>')
     def edit_folder(main_b64):
@@ -284,13 +315,16 @@ def start_web_ui(images_list, host, port, thumb_size, supported_extensions, mask
                         bottom_cut, bottom_hash = bottom_result
                         banner_suggestion = {'position': 'bottom', 'cut_pct': bottom_cut, 'hash': bottom_hash}
 
+                credit_match_hash = check_credit_match(f)
+
                 images_data.append({
                     'b64': f_b64,
                     'display_name': f.name,
                     'chapter': leaf_dir.name,
                     'serie': serie_dir.name if serie_dir else "Unknown",
                     'site': site_dir.name if site_dir else "Unknown",
-                    'is_credit_match': check_credit_match(f),
+                    'is_credit_match': credit_match_hash is not None,
+                    'credit_hash': credit_match_hash,
                     'banner_suggestion': banner_suggestion
                 })
                 
@@ -306,7 +340,8 @@ def start_web_ui(images_list, host, port, thumb_size, supported_extensions, mask
                 next_url=next_url,
                 progress_pct=progress_pct,
                 mask_popups=mask_popups,
-                shortcuts=shortcuts
+                shortcuts=shortcuts,
+                mobile_mini_mode=mobile_mini_mode
             )
         else:
             # Phase 2: Validation of generated merges
@@ -331,7 +366,8 @@ def start_web_ui(images_list, host, port, thumb_size, supported_extensions, mask
                 next_url=next_url,
                 progress_pct=progress_pct,
                 mask_popups=mask_popups,
-                shortcuts=shortcuts
+                shortcuts=shortcuts,
+                mobile_mini_mode=mobile_mini_mode
             )
 
     @app.route('/split/<b64>')
@@ -358,7 +394,7 @@ def start_web_ui(images_list, host, port, thumb_size, supported_extensions, mask
             'split.html', b64=b64, return_to=return_to, mask_popups=mask_popups,
             suggest_pct=suggest_pct, suggest_side=suggest_side, suggest_hash=suggest_hash,
             context='workflow', token='', image_url=f'/image/{b64}',
-            progress_pct=progress_pct, shortcuts=shortcuts
+            progress_pct=progress_pct, shortcuts=shortcuts, mobile_mini_mode=mobile_mini_mode
         )
 
     @app.route('/api_delete_banner_hash', methods=['POST'])

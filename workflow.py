@@ -118,9 +118,12 @@ def step_1_integrity(config):
         action = handle_step_error(errors, "Step 1 (Integrity Check)", allow_rescan=True)
         if action != "rescan":
             return action
+
 def step_2_web_ui(config):
     root_dir = Path(config['root_dir'])
-    port = find_free_port(config['web_port'])
+    # Host must be resolved BEFORE testing port availability.
+    host = resolve_web_ui_host(config)
+    port = find_free_port(config['web_port'], host=host)
     if port != config['web_port']:
         console.print(f"[yellow]Port {config['web_port']} is busy, using {port} instead.[/yellow]")
     exts = set(config['supported_extensions'])
@@ -140,11 +143,6 @@ def step_2_web_ui(config):
         console.print("[blue]Step 2: No images found for Web UI.[/blue]")
         return "next"
 
-    # Trash is purged at the very start of every Step 2 run: it only ever
-    # holds items deleted/cut/merged during a Step 2 session, and by the time
-    # the NEXT Step 2 starts, that previous session is long over -- so this
-    # is the right moment to reclaim the space without risking anything the
-    # user might still want to recover.
     trash_dir = Path(config['trash_dir'])
     purged_count = purge_trash(trash_dir)
     if purged_count:
@@ -158,12 +156,12 @@ def step_2_web_ui(config):
     credit_banners_path = Path(config['credit_banners_path'])
     credit_banner_threshold = config['credit_banner_threshold']
     shortcuts = resolve_keyboard_shortcuts(config)
-    host = resolve_web_ui_host(config)                                                               
+    mobile_mini_mode = bool(config.get('mobile_mini_mode', False))
     server_thread, completion_event = start_web_ui(
         first_images, host, port, config['thumb_size'], exts, mask_popups,
         credit_hashes_path, credit_hash_threshold,
         credit_banners_path, credit_banner_threshold,
-        shortcuts, trash_dir
+        shortcuts, trash_dir, mobile_mini_mode
     )
     
     url = f"http://127.0.0.1:{port}"

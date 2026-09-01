@@ -43,10 +43,7 @@
         .marker-h.suggested .marker-h-line { background: #38bdf8; }
         .marker-h:hover .marker-h-line, .marker-h.dragging .marker-h-line { height: 3px; box-shadow: 0 0 8px #fff; }
         .marker-v:hover .marker-v-line, .marker-v.dragging .marker-v-line { width: 3px; box-shadow: 0 0 8px #fff; }
-
-        /* "Goutte d'eau" : la pointe touche exactement le trait de découpe,
-           le bulbe déborde dans la marge du workspace pour ne jamais cacher
-           l'image. border-radius asymétrique + rotation = forme de larme. */
+        
         .marker-drop { position: absolute; width: 32px; height: 32px; background: #ef4444; border-radius: 50% 50% 50% 0; box-shadow: 0 2px 6px rgba(0, 0, 0, 0.6); pointer-events: none; transition: filter 0.15s ease; }
         .marker-h .marker-drop { left: 0; top: 50%; transform: translate(-62%, -50%) rotate(-135deg); }
         .marker-v .marker-drop { top: 0; left: 50%; transform: translate(-50%, -62%) rotate(-45deg); }
@@ -56,17 +53,21 @@
         .marker-h.dragging .marker-drop { transform: translate(-62%, -50%) rotate(-135deg) scale(1.15); }
         .marker-v.dragging .marker-drop { transform: translate(-50%, -62%) rotate(-45deg) scale(1.15); }
 
-        /* --- Mobile --- */
         @media (max-width: 640px) {
-            .toolbar-title small { display: none; } /* keyboard hint is meaningless without a keyboard */
+            .toolbar-title small { display: none; }
             .controls { justify-content: center; }
             .btn { flex: 1 1 110px; width: auto; height: 46px; font-size: 12px; }
             .tb-divider { display: none; }
             .workspace { padding: 34px 16px 34px 30px; }
         }
+
+        .mini-mode .btn { width: auto; min-width: 40px; padding: 0 8px; font-size: 12px; }
+        @media (max-width: 640px) {
+            .mini-mode .btn { flex: 1 1 60px; min-width: 40px; }
+        }
     </style>
 </head>
-<body>
+<body class="{{ 'mini-mode' if mobile_mini_mode else '' }}">
     {% if context == 'workflow' and progress_pct is not none %}
         <div class="progress-track"><div class="progress-fill" style="width: {{ progress_pct }}%;"></div></div>
     {% endif %}
@@ -84,18 +85,18 @@
                 <button class="btn info" onclick="learnBanner('top')">🧠 Learn Top Banner</button>
                 <button class="btn info" onclick="learnBanner('bottom')">🧠 Learn Bottom Banner</button>
             {% else %}
-                <button class="btn secondary" onclick="goBack()">← Back to chapter</button>
-                <button class="btn secondary" onclick="changeZoom(-20)">Zoom -</button>
+                <button class="btn secondary" id="btn-back-chapter" onclick="goBack()">{{ '← Back' if mobile_mini_mode else '← Back to chapter' }}</button>
+                <button class="btn secondary" id="btn-zoom-out" onclick="changeZoom(-20)">{{ '-' if mobile_mini_mode else 'Zoom -' }}</button>
                 <span class="zoom-label" id="zoom-level">100%</span>
-                <button class="btn secondary" onclick="changeZoom(20)">Zoom +</button>
+                <button class="btn secondary" id="btn-zoom-in" onclick="changeZoom(20)">{{ '+' if mobile_mini_mode else 'Zoom +' }}</button>
                 <div class="tb-divider"></div>
-                <button id="btn-mode-h" class="btn active" style="background:#ef4444;" onclick="setMode('h')">Horizontal Cut</button>
-                <button id="btn-mode-v" class="btn" style="background:#3b82f6;" onclick="setMode('v')">Vertical Cut</button>
-                <button class="btn secondary" onclick="clearMarkers()">Clear Markers</button>
-                <button class="btn primary" onclick="submitSplit()">Execute Split</button>
+                <button id="btn-mode-h" class="btn active" style="background:#ef4444;" onclick="setMode('h')">{{ 'Hori Cut' if mobile_mini_mode else 'Horizontal Cut' }}</button>
+                <button id="btn-mode-v" class="btn" style="background:#3b82f6;" onclick="setMode('v')">{{ 'Verti Cut' if mobile_mini_mode else 'Vertical Cut' }}</button>
+                <button class="btn secondary" id="btn-clear-markers" onclick="clearMarkers()">{{ 'Clear' if mobile_mini_mode else 'Clear Markers' }}</button>
+                <button class="btn primary" id="btn-execute-split" onclick="submitSplit()">{{ 'Split' if mobile_mini_mode else 'Execute Split' }}</button>
                 <div class="tb-divider"></div>
-                <button class="btn info" onclick="removeBanner('top')">🧠 Remove Above</button>
-                <button class="btn info" onclick="removeBanner('bottom')">🧠 Remove Below</button>
+                <button class="btn info" id="btn-remove-above" onclick="removeBanner('top')">{{ '🧠 Above' if mobile_mini_mode else '🧠 Remove Above' }}</button>
+                <button class="btn info" id="btn-remove-below" onclick="removeBanner('bottom')">{{ '🧠 Below' if mobile_mini_mode else '🧠 Remove Below' }}</button>
             {% endif %}
         </div>
         <div class="toolbar-title">
@@ -134,7 +135,46 @@
         const context = '{{ context }}'; // 'workflow' or 'maintenance'
         const refToken = '{{ token }}'; // only set in maintenance context
         const SHORTCUTS = {{ shortcuts|tojson }};
+		
+        const MINI_MODE_FORCED = {{ 'true' if mobile_mini_mode else 'false' }};
 
+        function isMiniActive() {
+            return MINI_MODE_FORCED || window.innerHeight > window.innerWidth;
+        }
+
+        // Plain label swap, workflow-context toolbar only -- the maintenance
+        // context's buttons (validateWholeImage, learnBanner...) aren't in
+        // this map and keep their fixed labels regardless of mini mode.
+        const MINI_LABELS = {
+            'btn-back-chapter': { full: '← Back to chapter', mini: '← Back' },
+            'btn-zoom-out': { full: 'Zoom -', mini: '-' },
+            'btn-zoom-in': { full: 'Zoom +', mini: '+' },
+            'btn-mode-h': { full: 'Horizontal Cut', mini: 'Hori Cut' },
+            'btn-mode-v': { full: 'Vertical Cut', mini: 'Verti Cut' },
+            'btn-clear-markers': { full: 'Clear Markers', mini: 'Clear' },
+            'btn-execute-split': { full: 'Execute Split', mini: 'Split' },
+            'btn-remove-above': { full: '🧠 Remove Above', mini: '🧠 Above' },
+            'btn-remove-below': { full: '🧠 Remove Below', mini: '🧠 Below' },
+        };
+
+        function updateMiniMode() {
+            const mini = isMiniActive();
+            document.body.classList.toggle('mini-mode', mini);
+            if (context !== 'workflow') return;
+            Object.entries(MINI_LABELS).forEach(([id, labels]) => {
+                const btn = document.getElementById(id);
+                if (btn) btn.textContent = mini ? labels.mini : labels.full;
+            });
+        }
+
+        let miniResizeTimer = null;
+        window.addEventListener('resize', function () {
+            clearTimeout(miniResizeTimer);
+            miniResizeTimer = setTimeout(updateMiniMode, 150);
+        });
+
+        updateMiniMode();
+		
         if (context === 'maintenance') {
             mode = 'h'; // Only a horizontal boundary makes sense for banner learning.
         }

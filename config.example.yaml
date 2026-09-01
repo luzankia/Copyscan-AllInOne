@@ -28,6 +28,7 @@ im_timeout: 20
 web_port: 5002  # Shared by the main Web UI and the standalone hash_maintenance.py tool.
                 # If already taken (e.g. both running at once), the next free port is used automatically.
 web_ui_network_access: false
+mobile_mini_mode: false 
 thumb_size: "220px"
 
 # Workflow Steps Activation

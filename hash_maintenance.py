@@ -19,26 +19,19 @@ import threading
 import uuid
 import webbrowser
 from pathlib import Path
-from utils import (
-    console, load_credit_hashes, save_credit_hashes,
-    load_credit_banners, save_credit_banners,
-    compute_phash, is_known_credit_hash, find_redundant_clusters,
-    compute_banner_slice_hash, find_free_port, resolve_project_path,
-    resolve_web_ui_host, get_local_ip,
-    DEFAULT_KEYBOARD_SHORTCUTS
-)
 
 import yaml
 from flask import Flask, render_template, request, jsonify, send_file
-from werkzeug.serving import make_server
+from werkzeug.serving import make_server, BaseWSGIServer
 
 from utils import (
-    console, load_credit_hashes, save_credit_hashes,
-    load_credit_banners, save_credit_banners,
-    compute_phash, is_known_credit_hash, find_redundant_clusters,
+    console, load_credit_hashes, save_credit_hashes, load_credit_banners,
+    save_credit_banners, compute_phash, is_known_credit_hash, find_redundant_clusters,
     compute_banner_slice_hash, find_free_port, resolve_project_path,
-    DEFAULT_KEYBOARD_SHORTCUTS
+    resolve_web_ui_host, get_local_ip, DEFAULT_KEYBOARD_SHORTCUTS
 )
+
+BaseWSGIServer.allow_reuse_address = False
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 TEMPLATES_DIR = SCRIPT_DIR / "templates"
@@ -312,7 +305,7 @@ def main():
     
     host = resolve_web_ui_host({'web_ui_network_access': settings['web_ui_network_access']})
 
-    port = find_free_port(settings['port'])
+    port = find_free_port(settings['port'], host=host)
     if port != settings['port']:
         console.print(f"[yellow]Port {settings['port']} is busy, using {port} instead.[/yellow]")
     url = f"http://127.0.0.1:{port}"
