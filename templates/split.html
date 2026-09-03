@@ -24,7 +24,9 @@
         .btn.info { background: #38bdf8; color: #0a0a0a; }
         .btn:hover { opacity: 0.85; }
         .btn.active { box-shadow: 0 0 0 3px #10b981; }
-
+		.btn.mode-h { background: #ef4444; }
+		.btn.mode-v { background: #3b82f6; }
+		
         .tb-divider { width: 2px; height: 32px; background: #444; margin: 0 4px; }
         .zoom-label { min-width: 45px; text-align: center; }
 
@@ -90,10 +92,9 @@
                 <span class="zoom-label" id="zoom-level">100%</span>
                 <button class="btn secondary" id="btn-zoom-in" onclick="changeZoom(20)">{{ '+' if mobile_mini_mode else 'Zoom +' }}</button>
                 <div class="tb-divider"></div>
-                <button id="btn-mode-h" class="btn active" style="background:#ef4444;" onclick="setMode('h')">{{ 'Hori Cut' if mobile_mini_mode else 'Horizontal Cut' }}</button>
-                <button id="btn-mode-v" class="btn" style="background:#3b82f6;" onclick="setMode('v')">{{ 'Verti Cut' if mobile_mini_mode else 'Vertical Cut' }}</button>
-                <button class="btn secondary" id="btn-clear-markers" onclick="clearMarkers()">{{ 'Clear' if mobile_mini_mode else 'Clear Markers' }}</button>
-                <button class="btn primary" id="btn-execute-split" onclick="submitSplit()">{{ 'Split' if mobile_mini_mode else 'Execute Split' }}</button>
+				<button id="btn-mode-toggle" class="btn mode-h" onclick="toggleMode()">H/V: Horizontal</button>
+				<button class="btn secondary" id="btn-clear-markers" onclick="clearMarkers()">{{ 'Clear' if mobile_mini_mode else 'Clear Markers' }}</button>
+				<button class="btn primary" id="btn-execute-split" onclick="submitSplit()">Split</button>
                 <div class="tb-divider"></div>
                 <button class="btn info" id="btn-remove-above" onclick="removeBanner('top')">{{ '🧠 Above' if mobile_mini_mode else '🧠 Remove Above' }}</button>
                 <button class="btn info" id="btn-remove-below" onclick="removeBanner('bottom')">{{ '🧠 Below' if mobile_mini_mode else '🧠 Remove Below' }}</button>
@@ -128,7 +129,8 @@
         }
 
         let currentZoom = 100; // Reference percentage
-        let mode = 'h'; // 'h' or 'v'
+		const SPLIT_MODE_KEY = 'copyscan_split_mode';
+		let mode = localStorage.getItem(SPLIT_MODE_KEY) === 'v' ? 'v' : 'h'; // 'h' or 'v'
         let cutsH = []; // Store percentages for responsive cutting
         let cutsV = [];
         const returnTo = '{{ return_to }}';
@@ -145,27 +147,25 @@
         // Plain label swap, workflow-context toolbar only -- the maintenance
         // context's buttons (validateWholeImage, learnBanner...) aren't in
         // this map and keep their fixed labels regardless of mini mode.
-        const MINI_LABELS = {
-            'btn-back-chapter': { full: '← Back to chapter', mini: '← Back' },
-            'btn-zoom-out': { full: 'Zoom -', mini: '-' },
-            'btn-zoom-in': { full: 'Zoom +', mini: '+' },
-            'btn-mode-h': { full: 'Horizontal Cut', mini: 'Hori Cut' },
-            'btn-mode-v': { full: 'Vertical Cut', mini: 'Verti Cut' },
-            'btn-clear-markers': { full: 'Clear Markers', mini: 'Clear' },
-            'btn-execute-split': { full: 'Execute Split', mini: 'Split' },
-            'btn-remove-above': { full: '🧠 Remove Above', mini: '🧠 Above' },
-            'btn-remove-below': { full: '🧠 Remove Below', mini: '🧠 Below' },
-        };
+		const MINI_LABELS = {
+			'btn-back-chapter': { full: '← Back to chapter', mini: '← Back' },
+			'btn-zoom-out': { full: 'Zoom -', mini: '-' },
+			'btn-zoom-in': { full: 'Zoom +', mini: '+' },
+			'btn-clear-markers': { full: 'Clear Markers', mini: 'Clear' },
+			'btn-remove-above': { full: '🧠 Remove Above', mini: '🧠 Above' },
+			'btn-remove-below': { full: '🧠 Remove Below', mini: '🧠 Below' },
+		};
 
-        function updateMiniMode() {
-            const mini = isMiniActive();
-            document.body.classList.toggle('mini-mode', mini);
-            if (context !== 'workflow') return;
-            Object.entries(MINI_LABELS).forEach(([id, labels]) => {
-                const btn = document.getElementById(id);
-                if (btn) btn.textContent = mini ? labels.mini : labels.full;
-            });
-        }
+		function updateMiniMode() {
+			const mini = isMiniActive();
+			document.body.classList.toggle('mini-mode', mini);
+			if (context !== 'workflow') return;
+			Object.entries(MINI_LABELS).forEach(([id, labels]) => {
+				const btn = document.getElementById(id);
+				if (btn) btn.textContent = mini ? labels.mini : labels.full;
+			});
+			setMode(mode);
+		}
 
         let miniResizeTimer = null;
         window.addEventListener('resize', function () {
@@ -426,12 +426,25 @@
             container.style.width = (800 * (currentZoom / 100)) + 'px';
         }
 
-        function setMode(newMode) {
-            mode = newMode;
-            document.getElementById('btn-mode-h').classList.remove('active');
-            document.getElementById('btn-mode-v').classList.remove('active');
-            document.getElementById('btn-mode-' + newMode).classList.add('active');
-        }
+		function setMode(newMode) {
+			mode = newMode;
+			localStorage.setItem(SPLIT_MODE_KEY, mode);
+			const btn = document.getElementById('btn-mode-toggle');
+			if (!btn) return; // absent en contexte 'maintenance' (forcé sur 'h', pas de toggle)
+			const mini = isMiniActive();
+			btn.classList.remove('mode-h', 'mode-v');
+			if (mode === 'h') {
+				btn.textContent = mini ? 'H' : 'H/V: Horizontal';
+				btn.classList.add('mode-h');
+			} else {
+				btn.textContent = mini ? 'V' : 'H/V: Vertical';
+				btn.classList.add('mode-v');
+			}
+		}
+
+		function toggleMode() {
+			setMode(mode === 'h' ? 'v' : 'h');
+		}
 
         function addMarker(e) {
             const rect = e.currentTarget.getBoundingClientRect();

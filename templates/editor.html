@@ -46,8 +46,6 @@
         .split-icon { position: absolute; top: 6px; right: 6px; background: #8b5cf6; padding: 5px; border-radius: 5px; cursor: pointer; z-index: 10; color: #fff; font-size: 16px; border: 1px solid #444; line-height: 1; transition: 0.2s; }
         .split-icon:hover { background: #7c3aed; transform: scale(1.1); box-shadow: 0 0 8px #8b5cf6; }
 
-        /* Uniform toolbar: every button same fixed size, single row that wraps as
-           a whole when the window is too narrow. Groups separated by a divider. */
         .toolbar-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; row-gap: 10px; justify-content: flex-end; }
         .btn { color: white; border: none; border-radius: 5px; cursor: pointer; font-size: 13px; font-weight: bold; transition: 0.2s; width: 138px; height: 42px; box-sizing: border-box; text-align: center; line-height: 1.25; padding: 0 6px; }
         .btn.primary { background: #3b82f6; }
@@ -58,8 +56,8 @@
         .btn.warn { background: #f59e0b; color: #1a1a1a; }
         .btn:hover { opacity: 0.85; }
         .btn:disabled { opacity: 0.35; cursor: not-allowed; }
-        /* Visual "ON" state for the Auto-next toggle -- same treatment split.html
-           uses for its Horizontal/Vertical mode buttons. */
+        .btn.orient-h { background: #ef4444; }
+		.btn.orient-v { background: #3b82f6; }
         .btn.active { box-shadow: 0 0 0 3px #10b981; }
         .tb-divider { width: 2px; height: 32px; background: #444; margin: 0 4px; }
         .zoom-label { min-width: 45px; text-align: center; }
@@ -70,7 +68,7 @@
         .help-icon:hover .help-tooltip { opacity: 1; }
         /* :hover doesn't exist on touch -- tapping toggles this class instead (see JS below). */
         .help-icon.show-tooltip .help-tooltip { opacity: 1; pointer-events: auto; }
-
+	
         /* --- Mobile --- */
         @media (max-width: 640px) {
             body { padding: 12px; }
@@ -110,7 +108,8 @@
                 <div class="tb-divider"></div>
                 <button class="btn secondary" id="btn-select-all" onclick="selectAll()">{{ 'All' if mobile_mini_mode else 'Select All' }}</button>
                 <button class="btn secondary" id="btn-deselect-all" onclick="deselectAll()">{{ 'None' if mobile_mini_mode else 'Deselect All' }}</button>
-                <button class="btn primary" id="btn-merge-pairs" onclick="submitSelection('merge')">{{ 'Merge' if mobile_mini_mode else 'Merge Pairs' }}</button>
+				<button id="btn-fuse-direction" class="btn orient-h" onclick="toggleFuseDirection()">H/V: Horizontal</button>
+				<button class="btn primary" id="btn-fuse" onclick="submitSelection('merge')">Fuse</button>
                 <button class="btn danger" id="btn-delete-selection" onclick="handleDeleteClick(event)">{{ 'Del' if mobile_mini_mode else 'Delete Selection' }}</button>
                 <div class="tb-divider"></div>
                 <button class="btn warn" id="btn-remember-credit" onclick="handleCreditClick(event)">{{ '🧠 Credit' if mobile_mini_mode else '🧠 Remember Credit' }}</button>
@@ -118,7 +117,7 @@
                 <button class="btn secondary" id="btn-auto-next" onclick="toggleAutoNext()" title="No Shift key on mobile: turn this on to make Delete / Remember Credit / Validate always jump to the next chapter afterward.">⏭ Auto-next: OFF</button>
                 <div class="tb-divider"></div>
                 <div class="help-icon">?
-                    <div class="help-tooltip"><strong>{{ shortcuts.merge_pairs }}</strong> = Merge Pairs. Hold <strong>Shift</strong> while clicking <strong>Delete Selection</strong> or <strong>Remember Credit</strong> — or use <strong>Shift+{{ shortcuts.delete_selection }}</strong> / <strong>Shift+{{ shortcuts.remember_credit }}</strong>, or turn on <strong>Auto-next</strong> — to also jump to the next chapter afterward.</div>
+                    <div class="help-tooltip"><strong>{{ shortcuts.merge_pairs }}</strong> = Fuse (dans la direction H/V actuelle). Hold <strong>Shift</strong> while clicking <strong>Delete Selection</strong> or <strong>Remember Credit</strong> — or use <strong>Shift+{{ shortcuts.delete_selection }}</strong> / <strong>Shift+{{ shortcuts.remember_credit }}</strong>, or turn on <strong>Auto-next</strong> — to also jump to the next chapter afterward.</div>
                 </div>
             {% else %}
                 <button class="btn secondary" id="btn-cancel-merges" onclick="cancelMerges()">Cancel Merges</button>
@@ -223,8 +222,30 @@
             'btn-next-chapter': { full: 'Next Chapter ⏭', mini: '⏭' },
             'btn-select-all': { full: 'Select All', mini: 'All' },
             'btn-deselect-all': { full: 'Deselect All', mini: 'None' },
-            'btn-merge-pairs': { full: 'Merge Pairs', mini: 'Merge' },
         };
+		
+		const FUSE_DIRECTION_KEY = 'copyscan_fuse_direction';
+		let fuseDirection = localStorage.getItem(FUSE_DIRECTION_KEY) === 'v' ? 'v' : 'h';
+
+		function setFuseDirection(direction) {
+			fuseDirection = direction;
+			localStorage.setItem(FUSE_DIRECTION_KEY, fuseDirection);
+			const btn = document.getElementById('btn-fuse-direction');
+			if (!btn) return;
+			const mini = isMiniActive();
+			btn.classList.remove('orient-h', 'orient-v');
+			if (fuseDirection === 'h') {
+				btn.textContent = mini ? 'H' : 'H/V: Horizontal';
+				btn.classList.add('orient-h');
+			} else {
+				btn.textContent = mini ? 'V' : 'H/V: Vertical';
+				btn.classList.add('orient-v');
+			}
+		}
+
+		function toggleFuseDirection() {
+			setFuseDirection(fuseDirection === 'h' ? 'v' : 'h');
+		}		
 
         function updateMiniLabels() {
             const mini = isMiniActive();
@@ -253,12 +274,13 @@
             }
         }
 
-        function updateMiniMode() {
-            document.body.classList.toggle('mini-mode', isMiniActive());
-            updateMiniLabels();
-            updateAutoNextButton();
-            refreshActionLabels(shiftHeld);
-        }
+		function updateMiniMode() {
+			document.body.classList.toggle('mini-mode', isMiniActive());
+			updateMiniLabels();
+			updateAutoNextButton();
+			if (PHASE === 1) setFuseDirection(fuseDirection);
+			refreshActionLabels(shiftHeld);
+		}
 
         function toggleAutoNext() {
             autoNext = !autoNext;
@@ -373,32 +395,32 @@
             });
         }
 
-        function submitSelection(action) {
-            if (selected.length === 0) {
-                alertMsg("Please select at least one image.");
-                return;
-            }
+		function submitSelection(action) {
+			if (selected.length === 0) {
+				alertMsg("Please select at least one image.");
+				return;
+			}
 
-            if (action === 'delete') {
-                if (!confirmAction("Warning! Do you really want to permanently DELETE the selected images?")) return;
-                fetch('/edit_delete', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({selected: selected})
-                }).then(res => res.json()).then(data => {
-                    if (data.status === 'ok') window.location.reload();
-                });
-            } else if (action === 'merge') {
-                fetch('/edit_merge', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({selected: selected, main_b64: '{{ main_b64 }}'})
-                }).then(res => res.json()).then(data => {
-                    if (data.status === 'ok') window.location.reload();
-                    else alertMsg("Error: " + data.message);
-                });
-            }
-        }
+			if (action === 'delete') {
+				if (!confirmAction("Warning! Do you really want to permanently DELETE the selected images?")) return;
+				fetch('/edit_delete', {
+					method: 'POST',
+					headers: {'Content-Type': 'application/json'},
+					body: JSON.stringify({selected: selected})
+				}).then(res => res.json()).then(data => {
+					if (data.status === 'ok') window.location.reload();
+				});
+			} else if (action === 'merge') {
+				fetch('/edit_merge', {
+					method: 'POST',
+					headers: {'Content-Type': 'application/json'},
+					body: JSON.stringify({selected: selected, main_b64: '{{ main_b64 }}', direction: fuseDirection})
+				}).then(res => res.json()).then(data => {
+					if (data.status === 'ok') window.location.reload();
+					else alertMsg("Error: " + data.message);
+				});
+			}
+		}
 
         function deleteSelectionAndNext() {
             if (selected.length === 0) {

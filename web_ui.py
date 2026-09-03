@@ -93,6 +93,15 @@ def start_web_ui(images_list, host, port, thumb_size, supported_extensions, mask
             merged.paste(bottom_img, (0, top_img.height))
             merged.save(output_path)
 
+    def merge_images_side_by_side_func(left_path, right_path, output_path):
+        with Image.open(left_path) as left_img, Image.open(right_path) as right_img:
+            width = left_img.width + right_img.width
+            height = max(left_img.height, right_img.height)
+            merged = Image.new("RGB", (width, height))
+            merged.paste(left_img, (0, 0))
+            merged.paste(right_img, (left_img.width, 0))
+            merged.save(output_path)
+
     def get_current_first_image(leaf_dir):
         """Returns the current first valid image in leaf_dir (natural sort), or None if the folder has become empty/unreadable."""
         try:
@@ -525,7 +534,7 @@ def start_web_ui(images_list, host, port, thumb_size, supported_extensions, mask
     def edit_delete():
         data = request.json
         selected_b64s = data.get('selected', [])
-        
+
         for b64 in selected_b64s:
             file_to_del = path_map.get(b64)
             if file_to_del and file_to_del.exists():
@@ -540,42 +549,53 @@ def start_web_ui(images_list, host, port, thumb_size, supported_extensions, mask
         data = request.json
         selected_b64s = data.get('selected', [])
         main_b64 = data.get('main_b64')
-        
+        # 'h' = empile haut/bas (comportement historique, undo d'une Horizontal Cut).
+        # 'v' = côte à côte (nouveau, undo d'une Vertical Cut).
+        direction = data.get('direction', 'h')
+        if direction not in ('h', 'v'):
+            direction = 'h'
+
         main_path = path_map.get(main_b64)
         if not main_path:
             return jsonify({"status": "error", "message": "Parent reference lost."})
-            
+
         leaf_dir = main_path.parent
         selected_paths = [path_map[b64] for b64 in selected_b64s if b64 in path_map]
-        
+
         # Natural sorting of selected files, independently of gaps in numbering
         selected_paths.sort(key=get_natural_key)
-        
+
+        merge_func = merge_images_func if direction == 'h' else merge_images_side_by_side_func
+
         i = 0
         # We process the files 2 by 2
         while i < len(selected_paths) - 1:
-            top_path = selected_paths[i]
-            bottom_path = selected_paths[i + 1]
-            
-            out_name = f"fus-{top_path.name}"
+            first_path = selected_paths[i]
+            second_path = selected_paths[i + 1]
+
+            out_name = f"fus-{first_path.name}"
             out_path = leaf_dir / out_name
-            
+
             try:
-                merge_images_func(top_path, bottom_path, out_path)
+                merge_func(first_path, second_path, out_path)
                 m_b64 = base64.urlsafe_b64encode(str(out_path).encode('utf-8')).decode('utf-8')
-                
+
+                # 'top_path'/'bottom_path' restent des noms génériques pour les 2
+                # originaux, peu importe la direction -- edit_finalize ne s'en
+                # sert que pour les trasher/restaurer, la sémantique du nom
+                # n'a pas d'impact fonctionnel.
                 PENDING_MERGES[m_b64] = {
                     'merged_path': out_path,
-                    'top_path': top_path,
-                    'bottom_path': bottom_path,
+                    'top_path': first_path,
+                    'bottom_path': second_path,
                     'filename': out_name,
                     'leaf_dir': leaf_dir
                 }
             except Exception as e:
-                logging.error(f"Assembly error between {top_path.name} and {bottom_path.name}: {e}")
-            
+                logging.error(f"Assembly error between {first_path.name} and {second_path.name}: {e}")
+
             i += 2
-            
+
         return jsonify({"status": "ok"})
 
     @app.route('/edit_finalize', methods=['POST'])
