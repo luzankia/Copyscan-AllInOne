@@ -32,11 +32,6 @@ from typing import Optional
 from utils import console
 
 
-# Fallback extensions if config.yaml is missing/invalid. Kept in sync with
-# config.example.yaml's default `supported_extensions` list.
-DEFAULT_SUPPORTED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".avif", ".bmp", ".gif"}
-
-
 def has_single_root_folder(zip_ref: zipfile.ZipFile) -> bool:
     """Check whether the archive's content sits under one single root folder."""
     namelist = zip_ref.namelist()
@@ -53,20 +48,22 @@ def has_single_root_folder(zip_ref: zipfile.ZipFile) -> bool:
 
 def get_supported_extensions() -> set:
     """Read `supported_extensions` from config.yaml next to this script.
-
-    Falls back to DEFAULT_SUPPORTED_EXTENSIONS on any read/parse error --
-    main.py does the real, strict config validation right after.
     """
     config_path = Path(__file__).resolve().parent / "config.yaml"
     try:
         with open(config_path, 'r', encoding='utf-8') as f:
             config = yaml.safe_load(f) or {}
-        extensions = config.get('supported_extensions')
-        if isinstance(extensions, list) and extensions:
-            return {str(ext).lower() for ext in extensions}
-    except Exception:
-        pass
-    return DEFAULT_SUPPORTED_EXTENSIONS
+    except Exception as e:
+        console.print(f"[bold red]Error: could not read config.yaml ({config_path}): {e}[/bold red]")
+        console.print("[yellow]Copy 'config.example.yaml' to 'config.yaml' and adjust it to your setup.[/yellow]")
+        sys.exit(1)
+
+    extensions = config.get('supported_extensions')
+    if not isinstance(extensions, list) or not extensions:
+        console.print(f"[bold red]Error: 'supported_extensions' is missing or invalid in {config_path}.[/bold red]")
+        sys.exit(1)
+
+    return {str(ext).lower() for ext in extensions}
 
 
 def find_image_subfolders(target_path: Path, extensions: set) -> list:
