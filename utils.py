@@ -564,7 +564,7 @@ def find_redundant_clusters(hash_list: list, threshold: int):
 
 
 # ---------------------------------------------------------------------------
-# Trash / Corbeille
+# Trash
 #
 # Every interactive deletion made during Step 2 (manual delete, credit-page
 # deletion, the original image consumed by a split, the two halves consumed

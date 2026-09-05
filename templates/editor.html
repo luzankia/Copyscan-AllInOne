@@ -30,6 +30,12 @@
 
         .card-label { padding: 6px; font-size: 12px; background: #1a1a1a; color: #ccc; word-break: break-all; border-bottom-left-radius: 4px; border-bottom-right-radius: 4px; }
 
+        /* Click-to-rename (phase 1 only): dashed underline hints the label
+           is editable; swapped for a text input on click (see startRename). */
+        .card-label .label-text { cursor: text; border-bottom: 1px dashed transparent; }
+        .card-label .label-text:hover { border-bottom-color: #666; }
+        .rename-input { width: 100%; background: #0f0f0f; color: #fff; border: 1px solid #3b82f6; border-radius: 3px; padding: 2px 4px; font-size: 12px; font-family: inherit; box-sizing: border-box; }
+
         .tags-wrapper { position: absolute; top: 6px; left: 6px; z-index: 10; display: flex; flex-direction: column; gap: 4px; align-items: flex-start; }
         .credit-tag, .banner-tag, .credit-delete-tag { padding: 5px; border-radius: 5px; font-size: 16px; line-height: 1; border: 1px solid #444; transition: 0.2s; }
         .credit-tag { background: #f59e0b; color: #1a1a1a; cursor: default; }
@@ -117,7 +123,7 @@
                 <button class="btn secondary" id="btn-auto-next" onclick="toggleAutoNext()" title="No Shift key on mobile: turn this on to make Delete / Remember Credit / Validate always jump to the next chapter afterward.">⏭ Auto-next: OFF</button>
                 <div class="tb-divider"></div>
                 <div class="help-icon">?
-                    <div class="help-tooltip"><strong>{{ shortcuts.merge_pairs }}</strong> = Fuse (dans la direction H/V actuelle). Hold <strong>Shift</strong> while clicking <strong>Delete Selection</strong> or <strong>Remember Credit</strong> — or use <strong>Shift+{{ shortcuts.delete_selection }}</strong> / <strong>Shift+{{ shortcuts.remember_credit }}</strong>, or turn on <strong>Auto-next</strong> — to also jump to the next chapter afterward.</div>
+                    <div class="help-tooltip"><strong>{{ shortcuts.merge_pairs }}</strong> = Fuse (in the current H/V direction). Hold <strong>Shift</strong> while clicking <strong>Delete Selection</strong> or <strong>Remember Credit</strong> — or use <strong>Shift+{{ shortcuts.delete_selection }}</strong> / <strong>Shift+{{ shortcuts.remember_credit }}</strong>, or turn on <strong>Auto-next</strong> — to also jump to the next chapter afterward.</div>
                 </div>
             {% else %}
                 <button class="btn secondary" id="btn-cancel-merges" onclick="cancelMerges()">Cancel Merges</button>
@@ -152,7 +158,7 @@
                         <img src="/image/{{ item.b64 }}" loading="lazy" />
                         <div class="select-veil"></div>
                     </div>
-                    <div class="card-label">{{ item.display_name }}</div>
+                    <div class="card-label"><span class="label-text" id="label-{{ item.b64 }}" onclick="startRename(event, '{{ item.b64 }}')">{{ item.display_name }}</span></div>
 					<div class="tooltip">
                         <strong>Chapter:</strong> {{ item.chapter }}<br>
                         <strong>Serie:</strong> {{ item.serie }}<br>
@@ -392,6 +398,49 @@
                 } else {
                     alertMsg("Error: " + data.message);
                 }
+            });
+        }
+
+        // Click-to-edit filename (phase 1 only). Enter/blur commits the new
+        // name to the server, Escape cancels. The server rejects the rename
+        // on a real name collision rather than silently auto-suffixing --
+        // resolve the collision first (delete/rename the other file), then retry.
+        function startRename(event, b64) {
+            event.stopPropagation();
+            const label = document.getElementById('label-' + b64);
+            if (!label || label.querySelector('input')) return;
+
+            const currentName = label.textContent;
+            const input = document.createElement('input');
+            input.type = 'text';
+            input.className = 'rename-input';
+            input.value = currentName;
+            label.textContent = '';
+            label.appendChild(input);
+            input.focus();
+            input.select();
+
+            const commit = () => {
+                const newName = input.value.trim();
+                if (!newName || newName === currentName) {
+                    label.textContent = currentName;
+                    return;
+                }
+                fetch('/edit_rename', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ b64, new_name: newName })
+                }).then(res => res.json()).then(data => {
+                    label.textContent = (data.status === 'ok' && data.renamed) ? data.new_name : currentName;
+                    if (data.status !== 'ok') alertMsg("Error: " + data.message);
+                });
+            };
+
+            input.addEventListener('blur', commit);
+            input.addEventListener('click', (e) => e.stopPropagation());
+            input.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') input.blur();
+                else if (e.key === 'Escape') { input.value = currentName; input.blur(); }
             });
         }
 

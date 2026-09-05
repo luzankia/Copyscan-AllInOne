@@ -544,6 +544,44 @@ def start_web_ui(images_list, host, port, thumb_size, supported_extensions, mask
                     logging.error(f"Failed to trash {file_to_del} from editor tab")
         return jsonify({"status": "ok"})
 
+    @app.route('/edit_rename', methods=['POST'])
+    def edit_rename():
+        """Renames one file inside its leaf folder. Rejects the request (no
+        disk change) on an empty name, a path separator, an unsupported
+        extension, or an existing target -- the caller resolves a real
+        conflict manually instead of getting a silent auto-suffix."""
+        data = request.json or {}
+        b64 = data.get('b64')
+        new_name = (data.get('new_name') or '').strip()
+
+        old_path = path_map.get(b64)
+        if not old_path or not old_path.exists():
+            return jsonify({"status": "error", "message": "File not found."})
+
+        if not new_name or '/' in new_name or '\\' in new_name:
+            return jsonify({"status": "error", "message": "Invalid file name."})
+
+        if Path(new_name).suffix.lower() not in supported_extensions:
+            allowed = ', '.join(sorted(supported_extensions))
+            return jsonify({"status": "error", "message": f"Unsupported extension. Allowed: {allowed}"})
+
+        new_path = old_path.parent / new_name
+        if new_path == old_path:
+            return jsonify({"status": "ok", "renamed": False})
+
+        if new_path.exists():
+            return jsonify({"status": "error", "message": f"A file named '{new_name}' already exists in this folder."})
+
+        try:
+            old_path.rename(new_path)
+        except Exception as e:
+            logging.error(f"Rename failed {old_path} -> {new_path}: {e}")
+            return jsonify({"status": "error", "message": f"Rename failed: {e}"})
+
+        path_map[b64] = new_path
+        logging.info(f"Editor rename: {old_path.name} -> {new_name}")
+        return jsonify({"status": "ok", "renamed": True, "new_name": new_name})
+
     @app.route('/edit_merge', methods=['POST'])
     def edit_merge():
         data = request.json
