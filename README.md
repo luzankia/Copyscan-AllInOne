@@ -12,20 +12,23 @@
 * **Advanced Web UI**, all in a single browser tab:
   * **Global Sort**: Fast manual review of every chapter, with thumbnails always showing the current first page (self-healing after edits, deletions, merges or splits).
   * **Chapter Editor**: Opens a specific chapter folder to:
-    * Permanently delete individual pages.
-    * **Vertically merge consecutive images** (useful when a hosting site does an unwanted horizontal cut), with a dedicated validation step to accept or reject each generated merge before it's finalized.
-    * **Split a single image** into multiple pages via an interactive cutting tool (horizontal markers, zoom), with automatic, conflict-free renumbering of the whole folder afterward.
+    * Delete individual pages (moved to the built-in trash, see below).
+    * **Fuse consecutive images, two by two**, in either direction — **H** stacks them top/bottom (undoes an unwanted horizontal cut), **V** joins them side-by-side (undoes a vertical cut). A dedicated validation step lets you accept or reject each generated fusion before it's finalized.
+    * **Split a single image** into multiple pages via an interactive cutting tool: place any mix of horizontal and vertical markers to slice the image on a grid, with zoom support and automatic, conflict-free renumbering of the whole folder afterward.
+    * **Rename any file in place**: click its filename label under the thumbnail, type the new name, press Enter.
+  * **Built-in trash**: every destructive Web UI action (delete, fusion, split, banner crop) moves the affected files to a trash folder instead of deleting them outright. A trash browser page lets you review and restore anything until the next run purges it.
+  * **Mobile / touch friendly**: the UI automatically switches to a compact layout on portrait (taller-than-wide) screens, or permanently via `mobile_mini_mode` in `config.yaml`. An **⏭ Auto-next** toggle replaces the Shift key on touch devices (makes Delete / Remember Credit / Validate always jump to the next chapter afterward).
   * **Optional popup masking**: confirmation dialogs and alerts in the Web UI can be silently auto-accepted via `mask_security_popups` in `config.yaml`, for a faster, uninterrupted review pass.
   * Responsive CSS tooltips and dynamic thumbnails.
 * **External tools integration**: [ImageMagick](https://imagemagick.org/) (for integrity checks) and [7-Zip](https://www.7-zip.org/) (for compression).
-  * If ImageMagick is missing, the CLI offers to skip the integrity check step for the current run instead just stopping the process.
+  * If ImageMagick is missing, the CLI offers to skip the integrity check step for the current run instead of just stopping the process.
   * If 7-Zip is missing, the CLI offers to fall back to Python's built-in `zipfile` module for compression (7-Zip remains the preferred, faster option when available).
-* **Portable configuration**: `config.yaml` is looked up next to the script by default (`--config <path>` to point elsewhere), and the project-related paths inside it (`csv_1_path`, `csv_2_path`, `log_path`, `credit_hashes_path`, `credit_banners_path`) can be given as relative paths — they're resolved against the script's own folder, not the current working directory, so the whole setup stays portable regardless of where you launch it from.
+* **Portable configuration**: `config.yaml` is looked up next to the script by default (`--config <path>` to point elsewhere), and the project-related paths inside it (`csv_1_path`, `csv_2_path`, `log_path`, `credit_hashes_path`, `credit_banners_path`, `trash_dir`) can be given as relative paths — they're resolved against the script's own folder, not the current working directory, so the whole setup stays portable regardless of where you launch it from.
 * **Natural chapter ordering**: chapters are listed everywhere (main gallery, previous/next navigation) in natural numeric order (`Ch.2 < Ch.9 < Ch.20 < Ch.110`), not plain lexical order.
 * **Flexible logging**: log file location can be overridden per run via `--log-path`, disabled entirely via `log_enabled: false` in `config.yaml`.
 * **Flexible folder layout**: works with a standard `root_dir/Parent1/Parent2/Leaf` hierarchy by default, or with a flat `root_dir/Leaf` layout via `--local`, for one-off or single-series batches.
 * **Automatic port collision avoidance**: the Web UI and the standalone [Hash Maintenance tool](#hash-maintenance-tool) share a single `web_port` setting. If it's already taken (e.g. both are running at once), the next free port is found automatically and used instead — no manual port juggling needed.
-* **Safe, no-data-loss logic**: Suffix-safe renaming and non-destructive operations. Your destination folder should never loss data.
+* **Safe, no-data-loss logic**: suffix-safe renaming, non-destructive operations, and a trash bin under every Web UI deletion. Your destination folder should never lose data.
 
 ---
 
@@ -88,8 +91,8 @@ python main.py
   * `--config <path>` — use a specific `config.yaml` instead of the one next to `main.py`.
   * `--root-dir <path>` / `--dest-dir <path>` — override `root_dir` / `dest_dir` from `config.yaml` for a single run.
   * `--log-path <path>` — override `log_path` from `config.yaml` for a single run; the destination folder is created automatically if it doesn't exist.
-  * `--local` — treat Leaf folders as sitting directly under `root_dir` (flat `root_dir/Leaf` layout) instead of the standard `root_dir/Parent1/Parent2/Leaf` hierarchy. Affects Steps 1 through 7 and Step 9's final move. Step 8 (CSV Operations) is automatically skipped in this mode, since it relies on the Parent1/Parent2 hierarchy — use `--skip-step 8` explicitly, or leave it enabled and it will simply no-op.
-  * `--skip-step <steps>` — bypass one or more stages for this run without editing `config.yaml`. Accepts any of `1 2 3 4 5 5.1 6 7 8` (the `5.1` sub-step, hash-suffix cleanup, can be skipped independently of `5`). Multiple values can be combined: `python main.py --skip-step 2 5.1 6`.
+  * `--local` — treat Leaf folders as sitting directly under `root_dir` (flat `root_dir/Leaf` layout) instead of the standard `root_dir/Parent1/Parent2/Leaf` hierarchy. Affects Steps 1 through 7 and Step 9's final move. Step 8 (CSV Operations) is automatically skipped in this mode, since it relies on the Parent1/Parent2 hierarchy.
+  * `--skip-step <steps>` — bypass one or more stages for this run without editing `config.yaml`. Accepts any of `1 2 3 4 5 5.1 6 7 8 9` (the `5.1` sub-step, hash-suffix cleanup, can be skipped independently of `5`). Multiple values can be combined: `python main.py --skip-step 2 5.1 6`.
   * `python main.py --help` for the full option list.
 * On startup, `config.yaml` is validated: missing keys or values of the wrong type stop the run immediately with a clear error message instead of failing mid-workflow.
 * If `step_1` is active and ImageMagick can't be found, the CLI asks whether to skip Step 1 for this run rather than aborting outright. If Step 1 is disabled (in `config.yaml` or via `--skip-step 1`), ImageMagick isn't checked at all.
@@ -100,26 +103,32 @@ python main.py
 
 ## Workflow Steps Overview
 
-1. **Integrity Check**: Strict validation of images using `magick identify -verbose`, run in parallel across files. Skipped entirely (no ImageMagick lookup) if `step_1` is disabled.
-2. **Manual Sort & Edit (Web UI)**: A local Flask server (`127.0.0.1` only) opens in your browser for:
-   * Global review — every chapter is listed with its current first page (self-healing after edits, deletions, merges or splits), in natural numeric order. Click anywhere on a chapter to open it in the Chapter Editor; validate once you're done reviewing to move on to the next workflow step.
-   * Per-chapter editing — for any chapter, delete pages (optionally jumping straight to the next chapter afterward), merge consecutive images vertically (with a dedicated review step — **Validate**, or **Cancel Merges** to discard every pending merge and restore the original unmerged pages), split one image into several with an interactive marker-based tool, or jump to the previous/next chapter directly. Selected images (pending deletion or merge) are highlighted in red with a translucent overlay, so it's clear at a glance which pages will be affected. On the last chapter, "Next Chapter" (and its keyboard shortcut) falls back to the main review page instead of being disabled. The merge-validation step only shows its Cancel/Validate buttons — no chapter navigation there.
-   * A thin, high-contrast progress bar is pinned to the top of the webUI, showing overall progress through the chapter list (no numbers, just a proportional fill).
-   * Keyboard shortcuts (all rebindable via `keyboard_shortcuts` in `config.yaml`; defaults shown below) :
+1. **Integrity Check**: Strict validation of images using `magick identify -verbose`, run in parallel across files (one worker thread per chapter folder). Skipped entirely (no ImageMagick lookup) if `step_1` is disabled.
+2. **Manual Sort & Edit (Web UI)**: A local Flask server opens in your browser for:
+   * **Main gallery** — every chapter is listed with its current first page (self-healing after edits, deletions, fusions or splits), in natural numeric order. Click anywhere on a chapter to open it in the Chapter Editor; validate once you're done reviewing to move on to the next workflow step. A **🗑 Trash** button on this page opens the trash browser (see [Trash & recovery](#trash--recovery) below).
+   * **Chapter Editor, phase 1 (selection)** — for any chapter:
+     * **Delete** the selected pages (moved to the trash, optionally jumping straight to the next chapter afterward).
+     * **Fuse** the selected pages two by two (natural order), stacked top/bottom or side-by-side — pick the direction with the **H/V** toggle, which remembers its last value.
+     * **Rename** any file by clicking its filename label (Enter commits, Escape cancels).
+     * **Split** a page via the ✂ icon.
+     * Jump to the previous/next chapter directly; on the last chapter, "Next Chapter" (and its keyboard shortcut) falls back to the main review page instead of being disabled.
+     * Selected images (pending deletion or fusion) are highlighted with a red translucent overlay, so it's clear at a glance which pages will be affected.
+   * **Chapter Editor, phase 2 (fusion validation)** — each pending fusion result is shown; click one to toggle its rejection, then **Validate Merges** (rejected results are trashed and their two originals kept; accepted ones trash the two originals and keep the fusion) or **Cancel Merges** to discard every pending fusion at once. Only Cancel/Validate are shown here — no chapter navigation.
+   * A thin, high-contrast progress bar is pinned to the top of the Web UI, showing overall progress through the chapter list (no numbers, just a proportional fill).
+   * **Keyboard shortcuts** (all rebindable via `keyboard_shortcuts` in `config.yaml`; defaults shown below):
      * **←** / **→** previous/next chapter (both phases),
      * Selection phase — **Delete** = Delete Selection,
-     * **Shift+Delete** = Delete Sel. & jump to next chapter.
-     * **C** = Remember Credit, 
-     * **Shift+C** = Remember Credit & jump to next chapter, 
-     * **M** = Merge Pairs,
-     * **V** = Validate Merges, 
-     * **X** executes split,
-     * Holding **Shift** show "& ⏭" and work for the mouse too,
-     * A "?" icon next to these buttons shows the behavior on hover. 
-   * Split tool markers can be placed by clicking, and dragged to fine-tune their position (cursor turns into a resize arrow when hovering a marker).
+     * **Shift+Delete** = Delete Sel. & jump to next chapter,
+     * **C** = Remember Credit,
+     * **Shift+C** = Remember Credit & jump to next chapter,
+     * **M** = Fuse (in the current H/V direction),
+     * **V** = Validate Merges,
+     * **X** executes split.
+     * Holding **Shift** shows a "& ⏭" hint on the buttons and works for mouse clicks too; on touch devices, the **⏭ Auto-next** toggle replaces the Shift key. A "?" icon next to these buttons shows the behavior on hover.
+   * **Split tool**: tap/click anywhere to place a marker, drag one to fine-tune its position, double-tap/double-click one to remove it. Red markers cut horizontally, blue markers vertically — combining both slices the image on a grid.
    * Confirmation popups and alerts can be auto-accepted via `mask_security_popups` for a faster review pass.
-   * **Known credit page detection**: every image is compared (perceptual hash, via `imagehash`) against a growing local database of previously-confirmed "credit page" images. A match is flagged with a "Known credit" tag (informational — shown in the global review and inside the Chapter Editor). Inside the Chapter Editor, select the matching page(s) and click **"🧠 Remember Credit"** to delete it and teach the system that image for future chapters/series; it takes effect immediately for the rest of the current session, and persists across runs via `credit_hashes_path`.
-   * **Embedded credit banner detection**: for banners merged into the top of a chapter's first page or the bottom of its last page (rather than a standalone page), the first/last image is scanned for a match against a growing local database of known banner crops. A match shows a "📎 Likely banner" tag on the chapter's grid view — clicking it opens the Split tool with the boundary already marked at the detected position (still draggable for fine-tuning), alongside a banner naming which known hash triggered the suggestion and a **"🗑 Delete this hash"** button to remove that specific entry from the database if the suggestion turns out to be badly placed or unusable. Confirm with **"🧠 Remove Above"** / **"🧠 Remove Below"** to crop it out in place and remember it for next time (persists via `credit_banners_path`). A banner merged in the *middle* of a page is rare enough to not be worth automating: split the page into pieces with the existing Split tool, delete the middle slice, then use "Merge Pairs" to stitch the remaining pieces back together.
+   * **Known credit page detection**: every image is compared (perceptual hash, via `imagehash`) against a growing local database of previously-confirmed "credit page" images. A match is flagged with a "Known credit" tag (informational — shown in the global review and inside the Chapter Editor). Inside the Chapter Editor, select the matching page(s) and click **"🧠 Remember Credit"** to remove it (trashed) and teach the system that image for future chapters/series; it takes effect immediately for the rest of the current session, and persists across runs via `credit_hashes_path`. If a "Known credit" tag turns out to be a false positive, its **🚫** button removes that exact hash from the database right from the editor.
+   * **Embedded credit banner detection**: for banners merged into the top of a chapter's first page or the bottom of its last page (rather than a standalone page), the first/last image is scanned for a match against a growing local database of known banner crops. A match shows a "📎 Likely banner" tag on the chapter's grid view — clicking it opens the Split tool with the boundary already marked at the detected position (still draggable for fine-tuning), alongside a banner naming which known hash triggered the suggestion and a **"🗑 Delete this hash"** button to remove that specific entry from the database if the suggestion turns out to be badly placed or unusable. Confirm with **"🧠 Remove Above"** / **"🧠 Remove Below"** to crop it out in place and remember it for next time (persists via `credit_banners_path`; the pre-crop original is backed up to the trash, so a misplaced crop can be undone). A banner merged in the *middle* of a page is rare enough to not be worth automating: split the page into pieces with the existing Split tool, delete the middle slice, then use Fuse to stitch the remaining pieces back together.
 3. **Regex Cleanup**: Automated deletion of files matching patterns in `delete_regex` (e.g., stray `.nomedia` files).
 4. **Empty Folder Pruning**: Recursive cleanup of empty directory structures.
 5. **Leaf Folder Renaming**: Regex-based, conflict-proof renaming of chapter folders using the first matching rule in `rename_regex`.
@@ -133,6 +142,19 @@ Each step can be toggled on or off in `config.yaml` under `steps_active`, or ski
 
 ---
 
+## Trash & recovery
+
+Every destructive action performed in the Step 2 Web UI — page deletion, "Remember Credit" deletion, fusion validation (originals), split (the sliced original), and banner crop (backed up as a copy) — routes through the trash folder (`trash_dir` in `config.yaml`) instead of deleting files outright. If a trash move ever fails, the operation is aborted and the file left in place rather than risking data loss.
+
+The **🗑 Trash** button on the main gallery opens a trash browser listing every trashed entry (most recent first) with its file name, original chapter folder, deletion reason, and timestamp. From there you can:
+
+* **Restore** selected entries back to their original location, or
+* **Purge** the whole trash permanently.
+
+The trash is automatically purged at the start of every Step 2 run — so anything deleted during a session stays recoverable until the next run begins.
+
+---
+
 ## Hash Maintenance Tool
 
 `hash_maintenance.py` is a **standalone** Flask tool for reviewing and curating the credit-page / credit-banner hash databases used by Step 2 — it's completely independent of the main workflow and can be launched any time, whether or not `main.py` is running.
@@ -141,7 +163,7 @@ Each step can be toggled on or off in `config.yaml` under `steps_active`, or ski
 python hash_maintenance.py
 ```
 
-* Reads `credit_hashes_path`, `credit_banners_path`, `credit_hash_threshold`, `credit_banner_threshold`, and `web_port` from `config.yaml` next to the script by default (`--config <path>` to point elsewhere; `--credit-hashes-path`, `--credit-banners-path`, `--credit-hash-threshold`, `--credit-banner-threshold`, `--port` to override individually without touching the file).
+* Reads `credit_hashes_path`, `credit_banners_path`, `credit_hash_threshold`, `credit_banner_threshold`, `web_ui_network_access`, and `web_port` from `config.yaml` next to the script by default (`--config <path>` to point elsewhere; `--credit-hashes-path`, `--credit-banners-path`, `--credit-hash-threshold`, `--credit-banner-threshold`, `--network`, `--port` to override individually without touching the file).
 * **Add a hash**: a single upload/drop zone accepts any reference image. It then opens the same Split tool used by the main workflow, letting you either **validate the whole image as-is** (added to the credit-page database) or **mark a top/bottom slice** and confirm it as a banner (added to the corresponding banner database) — no need to pick a category up front.
 * **Review & prune**: each database is listed as a table. Near-duplicate hashes are automatically clustered by Hamming distance and tagged (e.g. "cluster #2 (3)"), with a one-click "Select redundant duplicates" action to pre-check every member but the first in each cluster before deleting.
 * On startup, the console prints the exact resolved path of the config file and both hash databases.
@@ -170,7 +192,27 @@ python local.py
 
 ## Advanced Configuration
 
-`config.example.yaml` is the template — copy it to `config.yaml` and adjust every path. All keys below are required; the script validates their presence and type at startup.
+`config.example.yaml` is the template — copy it to `config.yaml` and adjust every path. All keys are required; the script validates their presence and type at startup.
+
+| Key | Purpose |
+|---|---|
+| `root_dir` / `dest_dir` | Input scan folder / output destination folder. |
+| `csv_1_path` / `csv_2_path` | Chapter and batch CSV mappings used by Step 8. |
+| `log_path` / `log_enabled` | Log file location (UTF-8) and on/off switch. |
+| `credit_hashes_path` / `credit_hash_threshold` | Known credit-page hash database and max perceptual-hash distance (0-64) for a match. |
+| `credit_banners_path` / `credit_banner_threshold` | Known banner-crop hash database and match threshold. |
+| `trash_dir` | Trash folder for every Web UI deletion (see [Trash & recovery](#trash--recovery)). |
+| `supported_extensions` | File extensions treated as images throughout the workflow. |
+| `sleep_time` / `im_timeout` | Pause between steps (s) / ImageMagick per-file timeout (s). |
+| `web_port` | Port shared by the Web UI and the Hash Maintenance tool (next free port used on collision). |
+| `web_ui_network_access` | `false` (default) binds the Web UI to `127.0.0.1` only; `true` binds `0.0.0.0` to reach it from other devices — unauthenticated, so LAN-only and at your own risk. |
+| `mobile_mini_mode` | `true` forces the compact mobile layout everywhere in the Web UI (it also activates automatically on portrait screens). |
+| `thumb_size` | Thumbnail size used across the Web UI. |
+| `steps_active` | Per-step on/off switches (`step_1` … `step_9`). |
+| `mask_security_popups` | Auto-accept every confirmation popup in the Web UI. |
+| `keyboard_shortcuts` | Rebindable Web UI shortcuts (defaults: `ArrowLeft`/`ArrowRight`, `Delete`, `C`, `M`, `V`, `X`). |
+| `delete_regex` | Filename patterns deleted by Step 3. |
+| `rename_regex` | Ordered pattern/replacement rules for Step 5 (first match wins). |
 
 ---
 
@@ -180,7 +222,8 @@ python local.py
 * **Invalid or incomplete `config.yaml`**: The script exits immediately with the list of missing/mistyped keys — check against `config.example.yaml`.
 * **AVIF Issues**: Verify that your ImageMagick installation includes `libavif` support if Step 1 fails on valid files.
 * **Locked Files**: Ensure no external programs (viewers, file explorers) are locking your directories during the workflow.
-* **Web UI unreachable**: The server only binds to `127.0.0.1:<web_port>` — it's local-only by design and won't be reachable from other devices. If `web_port` is already taken (e.g. the Hash Maintenance tool is already running), the next free port is used automatically and printed to the console at startup — check there for the actual URL if it's not the one you expected.
+* **Web UI unreachable**: The server binds to `127.0.0.1:<web_port>` by default — set `web_ui_network_access: true` to open it to your network. If `web_port` is already taken (e.g. the Hash Maintenance tool is already running), the next free port is used automatically and printed to the console at startup — check there for the actual URL if it's not the one you expected.
+* **Deleted something by mistake**: open the 🗑 Trash page from the main gallery and restore it — entries stay recoverable until the next run's Step 2 purges the trash.
 * **Hash Maintenance tool shows unexpected/missing hashes**: this is almost always a path mismatch — the tool defaults to the `config.yaml` sitting next to `hash_maintenance.py`. Check the console output at startup: it prints the exact config file and both database paths it resolved, plus how many hashes were loaded from each.
 * **Logging**: Every operation is logged in the path specified by `log_path` in `config.yaml` (UTF-8 encoded), unless `log_enabled` is set to `false`. The destination folder is created automatically if missing; use `--log-path` to override the location for a single run.
 * **Keyboard shortcut not working as expected**: an unknown entry name, an empty value, or two actions bound to the same key under `keyboard_shortcuts` in `config.yaml` all print a `Warning:` line to the console at startup (the affected binding falls back to its default) — check there first.
@@ -189,6 +232,6 @@ python local.py
 
 ## Security Notice
 
-* All operations are **non-destructive** by default logic: suffix-safe renaming resolves naming conflicts, and the destination folder is never automatically cleaned by the tool.
-* The Web UI server is bound to `127.0.0.1` only and is never exposed to the network. The standalone Hash Maintenance tool follows the same rule.
+* All operations are **non-destructive** by default logic: suffix-safe renaming resolves naming conflicts, Web UI deletions go through a restorable trash bin, and the destination folder is never automatically cleaned by the tool.
+* The Web UI server is bound to `127.0.0.1` only. `web_ui_network_access: true` opens it to the network (`0.0.0.0`) — the interface has **no authentication** and exposes destructive actions (deletion, fusion, split), so a clear warning is printed at startup; only enable it on a trusted LAN. The standalone Hash Maintenance tool follows the same rule (also openable via its `--network` flag).
 * `mask_security_popups: true` auto-accepts every confirmation dialog in the Web UI (including destructive actions like deletions and splits) — only enable it once you trust your review workflow, since it removes the "are you sure?" safety net.

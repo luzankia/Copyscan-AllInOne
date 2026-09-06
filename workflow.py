@@ -1,3 +1,10 @@
+"""
+Copyscan-AllInOne - main workflow steps (Step 1 through Step 9).
+
+Each step function takes the resolved config dict and returns "next",
+"rescan", or "quit" to tell main.py's execute_workflow() how to proceed.
+"""
+
 import subprocess
 import time
 import re
@@ -45,6 +52,7 @@ def handle_step_error(errors, step_name, allow_rescan=False) -> str:
         if choice == "2": return "quit"
 
 def step_1_integrity(config):
+    """Step 1: checks image integrity via ImageMagick, one worker thread per chapter folder."""
     root_dir = Path(config['root_dir'])
     timeout = config['im_timeout']
     exts = set(config['supported_extensions'])
@@ -53,12 +61,7 @@ def step_1_integrity(config):
     while True:
         errors = []
 
-        # Group files by their Leaf (chapter) folder so a single worker
-        # thread handles every image of the same chapter sequentially,
-        # instead of spawning one thread per individual file. The pool is
-        # sized by number of chapters, which scales better on chapters with
-        # thousands of pages (fewer concurrent subprocess spawns fighting
-        # over CPU/disk at the same time).
+        # Group files per chapter so one thread handles a whole chapter sequentially.
         leaf_files = {}
         for leaf in get_leaf_dirs(root_dir, local_mode):
             files = [
@@ -73,10 +76,9 @@ def step_1_integrity(config):
             console.print("[blue]Step 1: No image files found to check.[/blue]")
             return "next"
 
-                                             
         def check_single_file(file_path):
+            """Runs magick identify on one file; returns an error string, or None if OK."""
             try:
-                                                                         
                 res = subprocess.run(
                     ["magick", "identify", "-verbose", "-regard-warnings", str(file_path)],
                     capture_output=True,
@@ -120,6 +122,7 @@ def step_1_integrity(config):
             return action
 
 def step_2_web_ui(config):
+    """Step 2: launches the Flask Web UI for manual review/editing, and blocks until validated."""
     root_dir = Path(config['root_dir'])
     # Host must be resolved BEFORE testing port availability.
     host = resolve_web_ui_host(config)
@@ -179,6 +182,7 @@ def step_2_web_ui(config):
     return "next"
 
 def step_3_regex_clean(config):
+    """Step 3: deletes files matching any pattern in delete_regex."""
     root_dir = Path(config['root_dir'])
     patterns = [re.compile(p) for p in config['delete_regex']]
     local_mode = config.get('local_mode', False)
@@ -205,6 +209,7 @@ def step_3_regex_clean(config):
     return handle_step_error(errors, "Step 3 (Regex Cleanup)")
 
 def step_4_delete_empty(config):
+    """Step 4: recursively removes empty directories under root_dir."""
     root_dir = str(Path(config['root_dir']).resolve())
     errors = []
 
@@ -227,6 +232,7 @@ def step_4_delete_empty(config):
     return handle_step_error(errors, "Step 4 (Empty Folder Deletion)")
 
 def step_5_rename_leaf(config):
+    """Step 5: renames Leaf folders using the first matching rule in rename_regex."""
     root_dir = Path(config['root_dir'])
     rename_rules = config['rename_regex']
     local_mode = config.get('local_mode', False)
@@ -261,6 +267,7 @@ def step_5_rename_leaf(config):
     return handle_step_error(errors, "Step 5 (Rename Leaf)")
 
 def step_5_1_clean_hash_suffix(config):
+    """Step 5.1: strips trailing hash suffixes (e.g. '_a1b2c3d4') from Leaf folder names."""
     root_dir = Path(config['root_dir'])
     local_mode = config.get('local_mode', False)
     errors = []
@@ -273,12 +280,12 @@ def step_5_1_clean_hash_suffix(config):
         for leaf in leafs:
             match = pattern.match(leaf.name)
             if match:
-                # The first group contains the cleaned folder name
+                # The first group contains the cleaned folder name.
                 new_name = match.group(1).strip()
                 new_path = leaf.parent / new_name
                 
                 if new_path != leaf:
-                    # Native conflict resolution (handles duplicates ' (1)', ' (2)', etc.)
+                    # Native conflict resolution (handles duplicates ' (1)', ' (2)', etc.).
                     new_path = resolve_conflict(new_path, is_file=False)
                     try:
                         leaf.rename(new_path)
@@ -291,6 +298,7 @@ def step_5_1_clean_hash_suffix(config):
     return handle_step_error(errors, "Step 5.1 (Clean Hash Suffix)")
 
 def step_6_renumber_leaf(config):
+    """Step 6: renumbers purely-numeric filenames in each Leaf folder to close sequence gaps."""
     root_dir = Path(config['root_dir'])
     exts = set(config['supported_extensions'])
     local_mode = config.get('local_mode', False)
@@ -302,8 +310,7 @@ def step_6_renumber_leaf(config):
     with Progress(console=console) as progress:
         task = progress.add_task("[cyan]Step 6: Renumbering Leaf folder files...", total=len(leafs))
         for leaf in leafs:
-            # Collect files whose stem is purely numeric (e.g. "002"), ignoring
-            # anything else (non-image files, already-named chapters, etc.).
+            # Collect files whose stem is purely numeric (e.g. "002").
             numbered_files = []
             for f in leaf.iterdir():
                 if f.is_file() and f.suffix.lower() in exts:
@@ -315,8 +322,7 @@ def step_6_renumber_leaf(config):
                 progress.advance(task)
                 continue
 
-            # Sort by current numeric value (ties broken by filename) to
-            # preserve reading order regardless of any existing gaps.
+            # Sort by numeric value, ties broken by filename, to preserve reading order.
             numbered_files.sort(key=lambda item: (item[0], item[1].name))
 
             expected_sequence = list(range(1, len(numbered_files) + 1))
@@ -327,13 +333,10 @@ def step_6_renumber_leaf(config):
                 progress.advance(task)
                 continue
 
-            # Preserve the widest zero-padding found among the folder's files
-            # so e.g. "002" -> "001" keeps 3 digits, not "1".
+            # Preserve the widest zero-padding found among the folder's files.
             width = max(len(f.stem) for _, f in numbered_files)
 
-            # Phase 1: move every numbered file to a unique temporary name.
-            # This avoids collisions when a target number is already taken
-            # by another file in the folder mid-renumbering.
+            # Phase 1: move every file to a unique temp name to avoid collisions.
             temp_entries = []
             phase1_failed = False
             for num, f in numbered_files:
@@ -351,8 +354,7 @@ def step_6_renumber_leaf(config):
                 progress.advance(task)
                 continue
 
-            # Phase 2: rename the temporary files to their final, gap-free
-            # numbering, in the same order they were collected.
+            # Phase 2: rename temp files to their final gap-free numbering.
             for idx, temp_path in enumerate(temp_entries, start=1):
                 new_name = f"{str(idx).zfill(width)}{temp_path.suffix}"
                 new_path = temp_path.parent / new_name
@@ -370,6 +372,7 @@ def step_6_renumber_leaf(config):
     return handle_step_error(errors, "Step 6 (Renumber Leaf Files)")
 
 def step_7_compress(config):
+    """Step 7: compresses each Leaf folder into a .cbz archive, in parallel."""
     root_dir = Path(config['root_dir'])
     local_mode = config.get('local_mode', False)
     errors = []
@@ -385,7 +388,7 @@ def step_7_compress(config):
                 if file.is_file():
                     zf.write(file, arcname=file.relative_to(leaf))
 
-        # Integrity test: testzip() returns the name of the first bad file, or None if all is well
+        # Integrity test: testzip() returns the name of the first bad file, or None if all is well.
         with zipfile.ZipFile(archive_path, 'r') as zf:
             bad_file = zf.testzip()
             if bad_file is not None:
@@ -393,8 +396,7 @@ def step_7_compress(config):
 
     def compress_with_7z(leaf, archive_path):
         """Preferred compressor: 7-Zip via subprocess."""
-        # Note: we force 7z to only use 2 threads.
-        # To avoid a single archive from consuming all CPU cores.
+        # Force 7z to 2 threads so one archive doesn't hog all CPU cores.
         cmd_add = [executable, "a", "-tzip", "-r", "-mmt=2", str(archive_path), str(leaf) + os.sep]
         res_add = subprocess.run(cmd_add, capture_output=True)
         if res_add.returncode != 0:
@@ -407,8 +409,8 @@ def step_7_compress(config):
             logging.error(f"7z test stderr: {res_test.stderr.decode(errors='replace')}")
             raise RuntimeError(f"Test failed for archive: {archive_path}")
 
-    # Function for compressing a single Leaf folder
     def compress_single_leaf(leaf):
+        """Compresses one Leaf folder and removes it on success."""
         archive_path = leaf.parent / f"{leaf.name}.cbz"
         archive_path = resolve_conflict(archive_path, is_file=True)
         
@@ -427,8 +429,7 @@ def step_7_compress(config):
     with Progress(console=console) as progress:
         task = progress.add_task("[cyan]Step 7: Compressing Leaf folders (Parallel)...", total=len(leafs))
         
-        # We limit the number of concurrent threads to a reasonable amount (e.g., 4 folders at a time)
-        # to avoid overwhelming the disk with simultaneous write operations.
+        # Limit concurrent threads to avoid overwhelming disk I/O.
         max_compress_threads = min(4, os.cpu_count() or 1)
         with ThreadPoolExecutor(max_workers=max_compress_threads) as executor:
             futures = [executor.submit(compress_single_leaf, leaf) for leaf in leafs]
@@ -442,6 +443,7 @@ def step_7_compress(config):
     return handle_step_error(errors, "Step 7 (Compression)")
 
 def step_8_csv_rename(config):
+    """Step 8: batch-renames/merges Parent2 folders based on csv_1_path and csv_2_path mappings."""
     root_dir = Path(config['root_dir'])
     csv_1 = Path(config['csv_1_path'])
     csv_2 = Path(config['csv_2_path'])
@@ -455,9 +457,7 @@ def step_8_csv_rename(config):
 
     # Step 8.1: Rename
     if csv_1.exists():
-        # utf-8-sig transparently strips a leading BOM if the CSV was saved by
-        # an editor that adds one (e.g. Windows Notepad), which would otherwise
-        # corrupt the very first field of the first row.
+        # utf-8-sig strips a leading BOM (e.g. from Windows Notepad).
         with open(csv_1, 'r', encoding='utf-8-sig') as f:
             reader = csv.reader(f, delimiter=';')
             for row_num, row in enumerate(reader, start=1):
@@ -496,6 +496,7 @@ def step_8_csv_rename(config):
     return handle_step_error(errors, "Step 8 (CSV Operations)")
 
 def step_9_final_move(config):
+    """Step 9: moves processed folders to dest_dir and cleans up empty source directories."""
     root_dir = Path(config['root_dir'])
     dest_dir = Path(config['dest_dir'])
     local_mode = config.get('local_mode', False)
