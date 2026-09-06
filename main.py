@@ -1,3 +1,11 @@
+"""
+Copyscan-AllInOne - CLI entry point.
+
+Loads and validates config.yaml, applies CLI overrides, resolves
+project-relative paths, checks prerequisites (ImageMagick, 7-Zip), then
+runs the 9-step workflow defined in workflow.py.
+"""
+
 import argparse
 import yaml
 import sys
@@ -10,13 +18,12 @@ import workflow
 # Valid step tokens accepted by --skip-step (includes sub-step 5.1)
 VALID_STEP_TOKENS = ["1", "2", "3", "4", "5", "5.1", "6", "7", "8", "9"]
 
-# Resolve config.yaml relative to this script's location, not the current
-# working directory, so main.py finds it regardless of where it's launched
-# from (same convention as hash_maintenance.py).
+# Resolved next to this script (not the launch cwd), same convention as
+# hash_maintenance.py.
 SCRIPT_DIR = Path(__file__).resolve().parent
 DEFAULT_CONFIG_PATH = SCRIPT_DIR / "config.yaml"
 
-# Required keys expected in config.yaml, with their expected Python type
+# Required config.yaml keys and their expected Python type.
 REQUIRED_CONFIG_KEYS = {
     "root_dir": str,
     "dest_dir": str,
@@ -40,7 +47,15 @@ REQUIRED_CONFIG_KEYS = {
     "trash_dir": str,
 }
 
+# Keys expected to hold a numeric type: bool must be rejected explicitly
+# here, since isinstance(True, int) is True in Python and would otherwise
+# silently accept a stray "true"/"false" in config.yaml.
+NUMERIC_KEYS = {"sleep_time", "im_timeout", "web_port", "credit_hash_threshold", "credit_banner_threshold"}
+
+
 def load_config(config_path="config.yaml"):
+    """Loads config.yaml and validates it. Exits the process on any read
+    or validation failure."""
     try:
         with open(config_path, 'r', encoding='utf-8') as f:
             config = yaml.safe_load(f)
@@ -55,8 +70,10 @@ def load_config(config_path="config.yaml"):
     validate_config(config, config_path)
     return config
 
+
 def validate_config(config, config_path):
-    """Check that all required keys are present and correctly typed."""
+    """Checks that config is a mapping and that every required key is
+    present with the expected type. Exits the process on failure."""
     if not isinstance(config, dict):
         console.print(f"[bold red]Invalid config: {config_path} does not contain a valid YAML mapping.[/bold red]")
         sys.exit(1)
@@ -69,13 +86,19 @@ def validate_config(config, config_path):
 
     wrong_type = []
     for key, expected_type in REQUIRED_CONFIG_KEYS.items():
-        if not isinstance(config[key], expected_type):
+        value = config[key]
+        if key in NUMERIC_KEYS and isinstance(value, bool):
+            wrong_type.append(f"'{key}' (expected {expected_type}, got bool)")
+        elif not isinstance(value, expected_type):
             wrong_type.append(f"'{key}' (expected {expected_type})")
     if wrong_type:
         console.print(f"[bold red]Invalid type for key(s) in {config_path}: {', '.join(wrong_type)}[/bold red]")
         sys.exit(1)
 
+
 def build_arg_parser():
+    """Builds the CLI argument parser (--config, --root-dir, --dest-dir,
+    --log-path, --local, --skip-step)."""
     parser = argparse.ArgumentParser(description="Image Processing Workflow CLI")
     parser.add_argument(
         "--config", type=str, default=str(DEFAULT_CONFIG_PATH),
@@ -101,82 +124,85 @@ def build_arg_parser():
 
 
 def apply_cli_args(config, args):
+    """Overlays CLI arguments onto the loaded config (root/dest/log path
+    overrides, --local flag, --skip-step disabling)."""
     if args.root_dir: config['root_dir'] = args.root_dir
     if args.dest_dir: config['dest_dir'] = args.dest_dir
     if args.log_path: config['log_path'] = args.log_path
     if args.local: config['local_mode'] = True
 
     for step in args.skip_step:
+        # step_5_1 may be absent from steps_active if undefined in
+        # config.yaml: added here so --skip-step 5.1 is always honored.
         step_key = f"step_{step.replace('.', '_')}"
-        # step_5_1 may be absent from steps_active if not explicitly defined
-        # in config.yaml: we add it anyway so --skip-step 5.1 is always
-        # honored by execute_workflow.
         config['steps_active'][step_key] = False
 
     return config
 
+
 # Config keys resolved relative to SCRIPT_DIR when given as relative paths
-# (not the CLI-facing root_dir/dest_dir, which point to arbitrary scan
-# folders that may live on a different drive entirely).
+# (unlike root_dir/dest_dir, which point to arbitrary scan folders).
 PROJECT_PATH_KEYS = [
     "csv_1_path", "csv_2_path", "log_path",
     "credit_hashes_path", "credit_banners_path", "trash_dir",
 ]
 
+
 def resolve_project_paths(config):
+    """Resolves every path in PROJECT_PATH_KEYS against SCRIPT_DIR, so
+    relative values in config.yaml work regardless of the launch cwd."""
     for key in PROJECT_PATH_KEYS:
         config[key] = resolve_project_path(config[key], SCRIPT_DIR)
     return config
 
-def execute_workflow(config):
-    steps_map = {
-        'step_1': workflow.step_1_integrity,
-        'step_2': workflow.step_2_web_ui,
-        'step_3': workflow.step_3_regex_clean,
-        'step_4': workflow.step_4_delete_empty,
-        'step_5': workflow.step_5_rename_leaf,
-        'step_5_1': workflow.step_5_1_clean_hash_suffix,
-        'step_6': workflow.step_6_renumber_leaf,
-        'step_7': workflow.step_7_compress,
-        'step_8': workflow.step_8_csv_rename,
-        'step_9': workflow.step_9_final_move
-    }
 
+# Step functions in execution order. This dict is the single source of
+# truth for both step order and dispatch -- execute_workflow() iterates
+# its keys directly instead of keeping a separate ordered list in sync.
+STEPS_MAP = {
+    'step_1': workflow.step_1_integrity,
+    'step_2': workflow.step_2_web_ui,
+    'step_3': workflow.step_3_regex_clean,
+    'step_4': workflow.step_4_delete_empty,
+    'step_5': workflow.step_5_rename_leaf,
+    'step_5_1': workflow.step_5_1_clean_hash_suffix,
+    'step_6': workflow.step_6_renumber_leaf,
+    'step_7': workflow.step_7_compress,
+    'step_8': workflow.step_8_csv_rename,
+    'step_9': workflow.step_9_final_move,
+}
+
+
+def execute_workflow(config):
+    """Runs every step in STEPS_MAP in order, skipping disabled ones and
+    pausing between steps (except after Step 2, the Web UI)."""
     console.print("[bold magenta]=== Starting Image Processing Workflow ===[/bold magenta]")
-    
-    # Explicit ordered list of step keys to execute
-    ordered_steps = [
-        'step_1', 'step_2', 'step_3', 'step_4', 
-        'step_5', 'step_5_1', 'step_6', 'step_7', 'step_8', 'step_9'
-    ]
-    
-    for step_key in ordered_steps:
-        # By default, if step 5.1 is not mentioned in config.yaml,
-        # align it with the general step_5 activation status
+
+    for step_key, step_func in STEPS_MAP.items():
+        # step_5_1 defaults to step_5's activation status when not
+        # explicitly set in config.yaml.
         is_active = config['steps_active'].get(
-            step_key, 
+            step_key,
             config['steps_active'].get('step_5', True) if step_key == 'step_5_1' else False
         )
-        
+
         if not is_active:
             console.print(f"[yellow]Skipping {step_key.replace('_', ' ').title()} (Disabled)[/yellow]")
             continue
-            
-        step_func = steps_map[step_key]
+
         status = step_func(config)
-        
+
         if status == "quit":
             console.print("[bold red]Workflow aborted by user.[/bold red]")
             sys.exit(0)
-            
-        # Post-step successful sleep (except for the web interface)
+
         if step_key != 'step_2':
             sleep_t = config['sleep_time']
             console.print(f"[dim]Pausing for {sleep_t} seconds...[/dim]")
             time.sleep(sleep_t)
 
+
 if __name__ == "__main__":
-    # 1. Parse CLI args first so --config (if given) is known before loading
     parser = build_arg_parser()
     args = parser.parse_args()
 
@@ -186,27 +212,14 @@ if __name__ == "__main__":
         console.print(f"[yellow]Valid values are: {', '.join(VALID_STEP_TOKENS)}[/yellow]")
         sys.exit(1)
 
-    # 2. Load configuration (defaults to config.yaml next to this script)
     config = load_config(args.config)
-
-    # 3. Apply command line arguments if present
     config = apply_cli_args(config, args)
-
-    # 3b. Resolve project-relative paths (csv/log/credit-hash/trash files)
-    # against this script's own directory, so relative values in config.yaml
-    # work regardless of the launch cwd.
     config = resolve_project_paths(config)
 
-    # 4. Initialize the environment (logging, encoding)
     setup_environment(config['log_path'], config['log_enabled'])
-
-    # 5. Check system prerequisites (ImageMagick, 7-Zip)
     check_prerequisites(config)
-
-    # 6. Run the workflow
     execute_workflow(config)
 
-    # 7. FINAL PAUSE
     console.print("\n[bold magenta]===================================================[/bold magenta]")
     console.print("[bold green]✓ The workflow has been completed successfully![/bold green]")
     console.print("[dim]Press ENTER to close this window...[/dim]")

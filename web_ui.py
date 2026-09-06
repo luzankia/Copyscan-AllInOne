@@ -1,3 +1,13 @@
+"""
+Copyscan-AllInOne - Step 2 Web UI (Flask).
+
+Serves the main chapter gallery, the per-chapter editor (delete / merge /
+split), the split studio, and the trash browser. All destructive actions
+(delete, merge, split, banner crop) route through utils.send_to_trash()
+instead of touching files directly, so nothing is unrecoverable until the
+trash is purged.
+"""
+
 import threading
 import base64
 import logging
@@ -43,31 +53,27 @@ def start_web_ui(images_list, host, port, thumb_size, supported_extensions, mask
     completion_event = threading.Event()
     shortcuts = shortcuts or DEFAULT_KEYBOARD_SHORTCUTS
 
-    # Defensive fallback: workflow.py always resolves and passes trash_dir
-    # from config.yaml's required `trash_dir` key, so this should never
-    # actually trigger -- but a Web UI that can't delete anything safely is
-    # worse than one that keeps working with a sane default location.
+    # Defensive fallback: workflow.py always passes a resolved trash_dir, so
+    # this should never trigger -- but a broken default is safer than a
+    # Web UI that can't delete anything.
     trash_dir = Path(trash_dir) if trash_dir else Path(__file__).resolve().parent / "trash"
     
     # Shared registries within the server instance
     path_map = {}
     PENDING_MERGES = {} # b64_fusion -> { 'merged_path', 'top_path', 'bottom_path', 'filename', 'leaf_dir' }
 
-    # Known "credit page" perceptual hashes (whole duplicated pages), loaded once
-    # and grown in-memory as the user confirms new ones through the UI (also
-    # persisted to disk immediately).
+    # Known "credit page" perceptual hashes (whole duplicated pages), grown
+    # in-memory as the user confirms new ones and persisted immediately.
     known_credit_hashes = load_credit_hashes(credit_hashes_path) if credit_hashes_path else []
 
-    # Known embedded "credit banner" hashes (top/bottom slices merged into an
-    # otherwise real content page), same learning principle as above.
+    # Known embedded "credit banner" hashes (top/bottom slices merged into
+    # an otherwise real page), same learning principle as above.
     known_banners = load_credit_banners(credit_banners_path) if credit_banners_path else {"top": [], "bottom": []}
 
     def check_credit_match(file_path):
-        """Returns the known credit-page hash (hex string) that file_path's
-        perceptual hash matches within credit_hash_threshold, or None if it
-        doesn't match anything. Callers wanting a plain bool should compare
-        the result to None -- this is deliberately not a bool return so the
-        Web UI can offer a "delete this exact hash" action on a match."""
+        """Returns the known credit-page hash matching file_path's phash
+        within credit_hash_threshold, or None. Deliberately not a bool so
+        the UI can offer a "delete this exact hash" action on a match."""
         img_hash = compute_phash(file_path)
         if img_hash is None:
             return None
@@ -80,11 +86,13 @@ def start_web_ui(images_list, host, port, thumb_size, supported_extensions, mask
             file_path, position, known_banners.get(position, []), credit_banner_threshold
         )
 
-    # We only store leaf folders refrence list. First picture of each leaf folder will be computed on-demand in index().
-    # It will always reflect the actual first image of each leaf folder (even after a delete/fuse/split task).
+    # Only the leaf folders are stored: each folder's first image is
+    # recomputed on demand in index(), so it always reflects the current
+    # state even after a delete/merge/split.
     leaf_dirs = list(dict.fromkeys(img_path.parent for img_path in images_list))
 
     def merge_images_func(top_path, bottom_path, output_path):
+        """Stacks two images vertically (top over bottom)."""
         with Image.open(top_path) as top_img, Image.open(bottom_path) as bottom_img:
             width = max(top_img.width, bottom_img.width)
             height = top_img.height + bottom_img.height
@@ -94,6 +102,7 @@ def start_web_ui(images_list, host, port, thumb_size, supported_extensions, mask
             merged.save(output_path)
 
     def merge_images_side_by_side_func(left_path, right_path, output_path):
+        """Joins two images horizontally (left next to right)."""
         with Image.open(left_path) as left_img, Image.open(right_path) as right_img:
             width = left_img.width + right_img.width
             height = max(left_img.height, right_img.height)
@@ -123,8 +132,8 @@ def start_web_ui(images_list, host, port, thumb_size, supported_extensions, mask
         if not files:
             return
 
-        # Already sequential? Compare each file's current name against its
-        # expected "NNN.ext" target -- if everything matches, nothing to do.
+        # Skip the rename entirely if every file already matches its
+        # expected "NNN.ext" target.
         already_sequential = all(
             f.name == f"{str(i + 1).zfill(3)}{f.suffix}"
             for i, f in enumerate(files)
@@ -146,11 +155,12 @@ def start_web_ui(images_list, host, port, thumb_size, supported_extensions, mask
     # --- FLASK ROUTES ---
     @app.route('/')
     def index():
+        """Main gallery: one card per Leaf folder, showing its current first image."""
         main_images_data = []
         for leaf_dir in leaf_dirs:
             current_first = get_current_first_image(leaf_dir)
             if not current_first:
-                # In case of empty folders after delete task in edit mode.
+                # Folder became empty after a delete made in the editor tab.
                 continue
 
             b64 = base64.urlsafe_b64encode(str(current_first).encode('utf-8')).decode('utf-8')
@@ -173,6 +183,7 @@ def start_web_ui(images_list, host, port, thumb_size, supported_extensions, mask
 
     @app.route('/image/<b64_path>')
     def serve_image(b64_path):
+        """Serves an image by its base64-encoded path (main gallery, editor, or a pending merge result)."""
         real_path = path_map.get(b64_path)
         if not real_path and b64_path in PENDING_MERGES:
             real_path = PENDING_MERGES[b64_path]['merged_path']
@@ -183,6 +194,7 @@ def start_web_ui(images_list, host, port, thumb_size, supported_extensions, mask
 
     @app.route('/validate', methods=['POST'])
     def validate():
+        """Trashes the images marked for deletion on the main gallery and signals workflow.py to resume."""
         data = request.json
         to_delete_b64 = data.get('to_delete', [])
         
@@ -190,7 +202,7 @@ def start_web_ui(images_list, host, port, thumb_size, supported_extensions, mask
         for b64 in to_delete_b64:
             file_to_del = path_map.get(b64)
             if file_to_del:
-                # INDEPENDENT MANAGEMENT: Safety check if already deleted via edit tab
+                # Safety check: may already have been deleted via the editor tab.
                 if file_to_del.exists():
                     if send_to_trash(file_to_del, trash_dir, "manual_delete"):
                         logging.info(f"Web UI Trashed: {file_to_del}")
@@ -204,9 +216,9 @@ def start_web_ui(images_list, host, port, thumb_size, supported_extensions, mask
 
     @app.route('/mark_credit', methods=['POST'])
     def mark_credit():
-        """Trashes the selected images and remembers their perceptual hash as a
-        known 'credit page', so future chapters with the same image are
-        pre-flagged for deletion automatically (still requiring user validation)."""
+        """Trashes the selected images and remembers their phash as a known
+        'credit page', so future chapters with the same page get pre-flagged
+        for deletion (still requiring user validation)."""
         data = request.json
         selected_b64s = data.get('selected', [])
 
@@ -234,10 +246,9 @@ def start_web_ui(images_list, host, port, thumb_size, supported_extensions, mask
 
     @app.route('/api_delete_credit_hash', methods=['POST'])
     def api_delete_credit_hash():
-        """Removes a single hash from the known credit-page database (e.g. when
-        a 'Known credit' tag turns out to be a false positive). Mirrors
-        /api_delete_banner_hash below, for the whole-page credit database
-        instead of the top/bottom banner ones."""
+        """Removes a single hash from the known credit-page database (e.g. a
+        false-positive "Known credit" tag). Whole-page counterpart of
+        /api_delete_banner_hash below."""
         data = request.json or {}
         hash_value = data.get('hash')
 
@@ -255,6 +266,9 @@ def start_web_ui(images_list, host, port, thumb_size, supported_extensions, mask
 
     @app.route('/edit/<main_b64>')
     def edit_folder(main_b64):
+        """Chapter Editor: phase 1 (select images to delete/merge/split) if
+        no merge is pending for this folder, otherwise phase 2 (validate or
+        reject the pending merge results)."""
         main_path = path_map.get(main_b64)
         if not main_path:
             return "Main image ID not found", 404
@@ -266,8 +280,8 @@ def start_web_ui(images_list, host, port, thumb_size, supported_extensions, mask
         # Identify pending merges specific to this leaf directory
         folder_merges = {k: v for k, v in PENDING_MERGES.items() if v['leaf_dir'] == leaf_dir}
 
-        # Computed once, used by both phase 1 and phase 2 (navigating away from an
-        # unfinished merge review should still be able to jump to the next chapter).
+        # Used by both phases, so leaving an unfinished merge review can
+        # still jump to the next/previous chapter.
         try:
             current_idx = leaf_dirs.index(leaf_dir)
         except ValueError:
@@ -291,8 +305,7 @@ def start_web_ui(images_list, host, port, thumb_size, supported_extensions, mask
                 path_map[next_b64] = next_first
                 next_url = f"/edit/{next_b64}"
 
-        # Overall progress through the chapter list, used to draw the thin
-        # progress bar at the top of the editor page.
+        # Progress through the chapter list, drawn as the thin top bar.
         total_chapters = len(leaf_dirs)
         progress_pct = round(((current_idx + 1) / total_chapters) * 100, 2) if (current_idx != -1 and total_chapters > 0) else None
 
@@ -381,6 +394,9 @@ def start_web_ui(images_list, host, port, thumb_size, supported_extensions, mask
 
     @app.route('/split/<b64>')
     def split_page(b64):
+        """Opens the Split Studio for one image, with the progress bar
+        derived from its own leaf folder (accurate whichever chapter it's
+        opened from)."""
         if b64 not in path_map:
             return "Image not found", 404
         return_to = request.args.get('return_to', '')
@@ -388,9 +404,6 @@ def start_web_ui(images_list, host, port, thumb_size, supported_extensions, mask
         suggest_side = request.args.get('suggest_side', '')
         suggest_hash = request.args.get('suggest_hash', '')
 
-        # Same progress-bar math as the Chapter Editor, derived from this
-        # image's own leaf folder so the bar stays accurate when arriving
-        # here from the split icon on any chapter.
         leaf_dir = path_map[b64].parent
         try:
             current_idx = leaf_dirs.index(leaf_dir)
@@ -408,8 +421,8 @@ def start_web_ui(images_list, host, port, thumb_size, supported_extensions, mask
 
     @app.route('/api_delete_banner_hash', methods=['POST'])
     def api_delete_banner_hash():
-        """Removes a single hash from the known-banner database (e.g. when a
-        pre-placed suggestion turns out to be unusable/badly located)."""
+        """Removes a single hash from the known-banner database (e.g. a
+        pre-placed suggestion turns out unusable/badly located)."""
         data = request.json
         side = data.get('side')
         hash_value = data.get('hash')
@@ -429,11 +442,10 @@ def start_web_ui(images_list, host, port, thumb_size, supported_extensions, mask
 
     @app.route('/api_remove_banner', methods=['POST'])
     def api_remove_banner():
-        """Crops out a marked top/bottom slice (embedded credit banner) from a
-        single image in place, and remembers its hash for future auto-suggestion.
-        The pre-crop original is backed up (copied, not moved -- the file must
-        still exist for crop_remove_banner to overwrite) to the trash first, so
-        the crop can be undone via /trash if it's placed wrong."""
+        """Crops a marked top/bottom slice out of one image in place and
+        remembers its hash for future auto-suggestion. The pre-crop original
+        is backed up (copied, not moved) to the trash first so the crop can
+        be undone via /trash if it's placed wrong."""
         data = request.json
         b64 = data.get('b64')
         cut_percent = data.get('cut_percent')
@@ -451,9 +463,8 @@ def start_web_ui(images_list, host, port, thumb_size, supported_extensions, mask
         if not (0 < cut_percent < 100):
             return jsonify({"status": "error", "message": "Cut position out of range."})
 
-        # Back up the pre-crop original before touching the real file. If the
-        # backup fails, refuse the crop entirely rather than lose the discarded
-        # slice permanently.
+        # Refuse the crop entirely if the backup fails, rather than lose the
+        # discarded slice permanently.
         if not send_to_trash(target_path, trash_dir, "banner_crop_source", mode="copy"):
             return jsonify({"status": "error", "message": "Could not back up the original image to the trash; crop aborted to avoid data loss."})
 
@@ -472,6 +483,9 @@ def start_web_ui(images_list, host, port, thumb_size, supported_extensions, mask
 
     @app.route('/api_do_split', methods=['POST'])
     def api_do_split():
+        """Slices one image on a grid of horizontal/vertical cut points,
+        saves each piece, trashes the original, then resequences the
+        folder's filenames."""
         data = request.json
         b64 = data.get('b64')
         cuts_h = data.get('cuts_h', [])
@@ -513,11 +527,10 @@ def start_web_ui(images_list, host, port, thumb_size, supported_extensions, mask
                             cropped.save(leaf_dir / temp_name)
                             part_counter += 1
                             
-            # Move the original to the trash instead of deleting it outright,
-            # so it can be recovered from /trash if the split cuts were wrong.
-            # The split pieces are already saved at this point -- if the trash
-            # move fails, we deliberately leave the original in place (rather
-            # than losing it) and surface the error instead of resequencing.
+            # Trash the original instead of deleting it outright, so it can
+            # be recovered if the cuts were wrong. If the trash move fails,
+            # leave the original in place and surface the error rather than
+            # resequencing over a half-finished split.
             if not send_to_trash(target_path, trash_dir, "split_original"):
                 return jsonify({"status": "error", "message": "Split pieces were saved, but moving the original to the trash failed; the original was left in place to avoid data loss."})
             
@@ -532,6 +545,7 @@ def start_web_ui(images_list, host, port, thumb_size, supported_extensions, mask
 
     @app.route('/edit_delete', methods=['POST'])
     def edit_delete():
+        """Trashes the images selected in the editor's phase 1."""
         data = request.json
         selected_b64s = data.get('selected', [])
 
@@ -548,8 +562,8 @@ def start_web_ui(images_list, host, port, thumb_size, supported_extensions, mask
     def edit_rename():
         """Renames one file inside its leaf folder. Rejects the request (no
         disk change) on an empty name, a path separator, an unsupported
-        extension, or an existing target -- the caller resolves a real
-        conflict manually instead of getting a silent auto-suffix."""
+        extension, or an existing target -- collisions are resolved
+        manually, never auto-suffixed."""
         data = request.json or {}
         b64 = data.get('b64')
         new_name = (data.get('new_name') or '').strip()
@@ -584,11 +598,13 @@ def start_web_ui(images_list, host, port, thumb_size, supported_extensions, mask
 
     @app.route('/edit_merge', methods=['POST'])
     def edit_merge():
+        """Merges selected images two by two (vertically or side-by-side)
+        into pending results awaiting validation in phase 2."""
         data = request.json
         selected_b64s = data.get('selected', [])
         main_b64 = data.get('main_b64')
-        # 'h' = empile haut/bas (comportement historique, undo d'une Horizontal Cut).
-        # 'v' = côte à côte (nouveau, undo d'une Vertical Cut).
+        # 'h' = stacked top/bottom (legacy behavior, undoes a Horizontal Cut).
+        # 'v' = side by side (undoes a Vertical Cut).
         direction = data.get('direction', 'h')
         if direction not in ('h', 'v'):
             direction = 'h'
@@ -618,10 +634,10 @@ def start_web_ui(images_list, host, port, thumb_size, supported_extensions, mask
                 merge_func(first_path, second_path, out_path)
                 m_b64 = base64.urlsafe_b64encode(str(out_path).encode('utf-8')).decode('utf-8')
 
-                # 'top_path'/'bottom_path' restent des noms génériques pour les 2
-                # originaux, peu importe la direction -- edit_finalize ne s'en
-                # sert que pour les trasher/restaurer, la sémantique du nom
-                # n'a pas d'impact fonctionnel.
+                # top_path/bottom_path stay generic names for the two
+                # originals regardless of direction -- edit_finalize only
+                # uses them to trash/restore, the naming has no functional
+                # impact.
                 PENDING_MERGES[m_b64] = {
                     'merged_path': out_path,
                     'top_path': first_path,
@@ -638,6 +654,9 @@ def start_web_ui(images_list, host, port, thumb_size, supported_extensions, mask
 
     @app.route('/edit_finalize', methods=['POST'])
     def edit_finalize():
+        """Resolves every pending merge for a folder: rejected results are
+        trashed and the two originals kept; accepted ones trash the two
+        originals and rename the result to its final filename."""
         data = request.json
         rejected_b64s = data.get('rejected', [])
         main_b64 = data.get('main_b64')
@@ -655,13 +674,13 @@ def start_web_ui(images_list, host, port, thumb_size, supported_extensions, mask
             b_path = info['bottom_path']
             
             if m_b64 in rejected_b64s:
-                # Rejected: the fused result itself is the discardable piece --
-                # top_path/bottom_path are untouched and still on disk.
+                # Rejected: the fused result is the discardable piece --
+                # the two originals are untouched and still on disk.
                 if m_path.exists():
                     send_to_trash(m_path, trash_dir, "merge_rejected")
             else:
                 try:
-                    # Accepted: the two originals are what's now "cut away" --
+                    # Accepted: the two originals are now "cut away" --
                     # everything the user might want back after a bad merge.
                     if t_path.exists():
                         send_to_trash(t_path, trash_dir, "merge_source")
@@ -680,11 +699,11 @@ def start_web_ui(images_list, host, port, thumb_size, supported_extensions, mask
             
         return jsonify({"status": "ok"})
 
-    # --- TRASH / CORBEILLE ROUTES ---
+    # --- TRASH ROUTES ---
     @app.route('/trash')
     def trash_page():
+        """Lists trashed entries, most recently deleted first."""
         index = load_trash_index(trash_dir)
-        # Most recently trashed first.
         index_sorted = sorted(index, key=lambda e: e.get('deleted_at', ''), reverse=True)
 
         entries = []
@@ -703,8 +722,8 @@ def start_web_ui(images_list, host, port, thumb_size, supported_extensions, mask
 
     @app.route('/trash_image/<trash_name>')
     def trash_image(trash_name):
-        # Only serve names present in the manifest -- guards against path
-        # traversal via a crafted trash_name in the URL.
+        """Serves a trashed image's thumbnail. Only names present in the
+        manifest are served, to guard against path traversal."""
         index = load_trash_index(trash_dir)
         if not any(e.get('trash_name') == trash_name for e in index):
             return "Not found", 404
@@ -715,6 +734,7 @@ def start_web_ui(images_list, host, port, thumb_size, supported_extensions, mask
 
     @app.route('/trash_restore', methods=['POST'])
     def trash_restore():
+        """Restores the selected trashed entries to their original location."""
         data = request.json or {}
         selected = data.get('selected', [])
 
@@ -727,12 +747,13 @@ def start_web_ui(images_list, host, port, thumb_size, supported_extensions, mask
 
     @app.route('/trash_purge', methods=['POST'])
     def trash_purge():
+        """Permanently empties the trash."""
         count = purge_trash(trash_dir)
         return jsonify({"status": "ok", "purged": count})
 
     # --- SERVER LAUNCH ---
-    # We start the server thread here. 
-    # workflow.py will open the browser, wait for event and stop the thread.
+    # workflow.py opens the browser, waits for completion_event, then stops
+    # this thread.
     server_thread = ServerThread(app, host, port)
     server_thread.start()
     

@@ -1,3 +1,13 @@
+"""
+Copyscan-AllInOne - shared utility functions.
+
+Covers: config path resolution, port/host resolution for the Web UI,
+environment/logging setup, keyboard shortcut resolution, natural sort and
+folder traversal helpers, safe folder merging, perceptual-hash based
+credit-page/banner detection (via imagehash + numpy), and the trash
+(recycle bin) system used by every Step 2 deletion.
+"""
+
 import os
 import sys
 import io
@@ -18,22 +28,17 @@ import numpy as np
 console = Console()
 
 def resolve_project_path(path_str: str, base_dir: Path) -> str:
-    """Resolve a config path relative to base_dir (typically the script's own
-    directory) rather than the process's current working directory.
-
-    Absolute paths (e.g. "C:\\Data\\..." or "Z:\\...") are returned unchanged.
-    Relative paths (e.g. "exception.txt", "logs/workflow.log") are anchored to
-    base_dir, so config.yaml stays portable regardless of where the script is
-    launched from."""
+    """Resolves a config path relative to base_dir instead of the process's
+    cwd. Absolute paths are returned unchanged."""
     p = Path(path_str)
     if p.is_absolute():
         return str(p)
     return str((base_dir / p).resolve())
 
 def find_free_port(start_port: int, host: str = '127.0.0.1', max_attempts: int = 50) -> int:
-    """Returns the first available TCP port at or after start_port, found by
-    attempting to bind a socket. 
-    Raises RuntimeError if no free port is found within max_attempts."""
+    """Returns the first available TCP port at or after start_port (tested
+    by binding a socket). Raises RuntimeError if none is free within
+    max_attempts."""
     port = start_port
     for _ in range(max_attempts):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -47,12 +52,9 @@ def find_free_port(start_port: int, host: str = '127.0.0.1', max_attempts: int =
     raise RuntimeError(f"No free port found starting at {start_port} (tried {max_attempts} ports).")
 
 def resolve_web_ui_host(config: dict) -> str:
-    """Determines the bind host for the Web UI Flask servers from the optional
-    `web_ui_network_access` key in config.yaml (defaults to False, i.e.
-    localhost-only, same as before this option existed). When enabled, prints
-    a clear security warning since the interface has no authentication and
-    exposes destructive actions (deletion, merge, split) to anyone able to
-    reach the port."""
+    """Resolves the Web UI bind host from config.yaml's `web_ui_network_access`
+    (default False = localhost-only). Prints a security warning when network
+    access is enabled, since the UI has no authentication."""
     network_access = config.get('web_ui_network_access', False)
 
     if not isinstance(network_access, bool):
@@ -74,30 +76,28 @@ def resolve_web_ui_host(config: dict) -> str:
 
 
 def get_local_ip() -> str:
-    """Best-effort guess of this machine's LAN IP address, used only to print
-    a convenient URL when the Web UI is opened to the network. Falls back to
-    '127.0.0.1' if it can't be determined (e.g. no active network interface).
-    Uses a UDP 'connect' to a public IP as a trick to learn the outbound
-    interface address -- no actual packet is sent (UDP connect is local-only)."""
+    """Best-effort guess of this machine's LAN IP, for printing a convenient
+    URL when the Web UI is opened to the network. Falls back to 127.0.0.1."""
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
+        # UDP "connect" is local-only (no packet sent) -- just a trick to
+        # learn the outbound interface address.
         s.connect(('8.8.8.8', 80))
         return s.getsockname()[0]
     except Exception:
         return '127.0.0.1'
     finally:
         s.close()
+
 def setup_environment(log_path, log_enabled=True):
-    """Enforce UTF-8 encoding and setup logging."""
+    """Enforces UTF-8 encoding on Windows consoles and configures logging
+    (or routes it to a null handler if log_enabled is False)."""
     if os.name == 'nt':
         os.system('chcp 65001 >nul 2>&1')
         sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
         sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
 
     if not log_enabled:
-        # Logging disabled via config.yaml (log_enabled: false): route logs to a
-        # null handler so any logging.info/error call elsewhere in the code
-        # never touches disk and never crashes.
         logging.basicConfig(handlers=[logging.NullHandler()], level=logging.CRITICAL)
         return
 
@@ -118,12 +118,12 @@ def setup_environment(log_path, log_enabled=True):
     logging.info("Workflow started.")
 
 def check_prerequisites(config):
-    """Check for ImageMagick and 7-Zip, accounting for whether Step 1 is active
-    and offering a zipfile fallback for compression when 7-Zip is missing."""
+    """Checks for ImageMagick (if Step 1 is active) and 7-Zip, prompting
+    the user to skip/fallback or abort when either is missing."""
     steps_active = config.get('steps_active', {})
     step_1_active = steps_active.get('step_1', True)
 
-    # --- ImageMagick check (only relevant if Step 1 is active) ---
+    # ImageMagick is only required when Step 1 (Integrity Check) is active.
     if step_1_active and not shutil.which('magick'):
         console.print("[bold red]ImageMagick (magick) is required for Step 1 (Integrity Check) but was not found.[/bold red]")
         choice = Prompt.ask(
@@ -141,7 +141,7 @@ def check_prerequisites(config):
             input("\nPress Enter to exit...")
             sys.exit(1)
 
-    # --- 7-Zip check (7-Zip stays the preferred compressor; zipfile is a fallback) ---
+    # 7-Zip stays the preferred compressor; zipfile is only a fallback.
     if shutil.which('7z') or shutil.which('7za'):
         config['use_zipfile_fallback'] = False
     else:
@@ -161,13 +161,10 @@ def check_prerequisites(config):
             input("\nPress Enter to exit...")
             sys.exit(1)
 
-# Web UI keyboard shortcuts (Chapter Editor and Split Studio). Every entry is
-# a single JavaScript KeyboardEvent.key value -- see:
-# https://developer.mozilla.org/en-US/docs/Web/API/UI_Events/Keyboard_event_key_values
-# Single letters are matched case-insensitively, so "m" and "M" are the same
-# binding. Holding Shift on delete_selection / remember_credit / validate_merges
-# also jumps to the next chapter afterward -- that's fixed behavior, not a
-# separate binding to configure.
+# Web UI keyboard shortcuts (Chapter Editor and Split Studio). Each value is
+# a single JavaScript KeyboardEvent.key, matched case-insensitively. Shift on
+# delete_selection/remember_credit/validate_merges also jumps to the next
+# chapter -- that's fixed behavior, not a separate binding.
 DEFAULT_KEYBOARD_SHORTCUTS = {
     "prev_chapter": "ArrowLeft",
     "next_chapter": "ArrowRight",
@@ -179,11 +176,9 @@ DEFAULT_KEYBOARD_SHORTCUTS = {
 }
 
 def resolve_keyboard_shortcuts(config: dict) -> dict:
-    """Merges config.yaml's optional `keyboard_shortcuts` section over
-    DEFAULT_KEYBOARD_SHORTCUTS, so a partial override doesn't drop the other
-    bindings. Unknown action names and empty/non-string values are ignored
-    (with a warning) and fall back to their default. Also warns -- without
-    failing -- if two actions end up bound to the same key."""
+    """Merges config.yaml's `keyboard_shortcuts` over the defaults (partial
+    overrides keep the rest). Warns (without failing) on unknown actions,
+    invalid values, or two actions sharing the same key."""
     shortcuts = dict(DEFAULT_KEYBOARD_SHORTCUTS)
     user_shortcuts = config.get('keyboard_shortcuts') or {}
 
@@ -207,9 +202,8 @@ def resolve_keyboard_shortcuts(config: dict) -> dict:
     return shortcuts
 
 def natural_sort_key(path: Path):
-    """Splits a path's name on digit runs for natural, human-friendly ordering
-    (e.g. 'Ch.9' < 'Ch.20' < 'Ch.110', instead of the plain lexical order
-    that would put 'Ch.110' before 'Ch.20')."""
+    """Splits a filename on digit runs for natural ordering
+    (e.g. 'Ch.9' < 'Ch.20' < 'Ch.110')."""
     return [int(text) if text.isdigit() else text.lower() for text in re.split(r'(\d+)', path.name)]
 
 def _sorted_subdirs(parent: Path):
@@ -217,10 +211,8 @@ def _sorted_subdirs(parent: Path):
     return sorted((p for p in parent.iterdir() if p.is_dir()), key=natural_sort_key)
 
 def get_leaf_dirs(root_dir: Path, local_mode=False):
-    """Yield all Leaf directories, in natural sort order.
-    Standard layout: Root -> Parent1 -> Parent2 -> Leaf.
-    Local layout (--local): Root -> Leaf (Leaf folders sit directly under root_dir).
-    """
+    """Yields all Leaf directories in natural sort order: Root/Leaf in
+    local_mode, otherwise Root/Parent1/Parent2/Leaf."""
     if not root_dir.exists():
         return
     if local_mode:
@@ -241,7 +233,7 @@ def get_parent2_dirs(root_dir: Path):
             yield p1, p2
 
 def resolve_conflict(target_path: Path, is_file=False) -> Path:
-    """Resolve naming conflicts by appending ' (x)'."""
+    """Resolves a naming conflict by appending ' (1)', ' (2)', etc."""
     if not target_path.exists():
         return target_path
     
@@ -258,7 +250,8 @@ def resolve_conflict(target_path: Path, is_file=False) -> Path:
         counter += 1
 
 def merge_directories(src_dir: Path, dest_dir: Path, error_list: list):
-    """Safely merge src_dir into dest_dir, handling file conflicts without data loss."""
+    """Safely merges src_dir into dest_dir, resolving file-name conflicts
+    without overwriting anything."""
     try:
         dest_dir.mkdir(parents=True, exist_ok=True)
         for item in src_dir.iterdir():
@@ -270,7 +263,7 @@ def merge_directories(src_dir: Path, dest_dir: Path, error_list: list):
             elif item.is_dir():
                 merge_directories(item, dest_dir / item.name, error_list)
         
-        # Remove empty source directory after merge
+        # Remove the now-empty source directory.
         if not any(src_dir.iterdir()):
             src_dir.rmdir()
     except Exception as e:
@@ -278,8 +271,8 @@ def merge_directories(src_dir: Path, dest_dir: Path, error_list: list):
         logging.error(f"Merge error {src_dir}: {str(e)}")
 
 def load_credit_banners(path: Path) -> dict:
-    """Load known embedded-banner hashes, keyed by position ('top'/'bottom').
-    Returns {'top': [], 'bottom': []} if the file doesn't exist or is unreadable."""
+    """Loads known embedded-banner hashes, keyed by 'top'/'bottom'. Returns
+    an empty structure if the file doesn't exist or is unreadable."""
     default = {"top": [], "bottom": []}
     if not path.exists():
         return default
@@ -298,7 +291,7 @@ def load_credit_banners(path: Path) -> dict:
         return default
 
 def save_credit_banners(path: Path, banners: dict):
-    """Persist known embedded-banner hashes to a JSON file."""
+    """Persists known embedded-banner hashes to a JSON file (deduplicated)."""
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         cleaned = {
@@ -312,17 +305,10 @@ def save_credit_banners(path: Path, banners: dict):
 
 def suggest_banner_cut(image_path: Path, position: str, known_hashes: list, threshold: int,
                         min_pct: float = 3, max_pct: float = 35, step_pct: float = 0.5):
-    """Sweeps candidate banner heights near the given edge ('top' or 'bottom') of the
-    image, looking for the slice that best matches a known banner hash. Returns a
-    (cut_pct, matched_hash) tuple where cut_pct is the resulting cut boundary as a Y
-    position (percentage from the TOP of the image, 0-100) - the same convention used
-    when a marker is placed by clicking on the image - so the caller can use it
-    directly to pre-fill the split tool's marker and later pass it to
-    crop_remove_banner unchanged. matched_hash is the specific known hash (hex string)
-    that produced the best match, so the caller can offer to delete just that entry
-    if the suggestion turns out to be unusable. Returns None if no match is found
-    within `threshold`. Height is unknown in advance (banners vary in size), hence
-    the sweep instead of a fixed offset."""
+    """Sweeps candidate banner heights near the given edge ('top'/'bottom')
+    looking for the best match against known_hashes. Returns (cut_pct,
+    matched_hash) using the same Y-from-top convention as manual markers, or
+    None if nothing matches within threshold."""
     if not known_hashes:
         return None
     try:
@@ -338,17 +324,20 @@ def suggest_banner_cut(image_path: Path, position: str, known_hashes: list, thre
         img.close()
         return None
 
+    # Banner height is unknown in advance, hence the sweep instead of a
+    # fixed offset. pct here is a candidate HEIGHT from the edge, converted
+    # to a Y-from-top position only once the best match is found below.
+    # Steps are computed from the loop index (not accumulated via +=) to
+    # avoid floating-point drift across ~64 iterations.
     best_banner_height_pct, best_dist, best_hash_idx = None, None, None
-    pct = min_pct
-    while pct <= max_pct:
-        # pct here is the candidate banner HEIGHT (from the edge), used only for
-        # the search - converted to a Y-from-top position just before returning.
+    step_count = int(round((max_pct - min_pct) / step_pct)) + 1
+    for i in range(step_count):
+        pct = min_pct + i * step_pct
         cut_px = max(1, min(height - 1, int(height * pct / 100)))
         box = (0, 0, width, cut_px) if position == 'top' else (0, height - cut_px, width, height)
         try:
             candidate = imagehash.phash(img.crop(box)).hash.flatten()
         except Exception:
-            pct += step_pct
             continue
 
         distances = np.count_nonzero(known_matrix != candidate, axis=1)
@@ -357,23 +346,19 @@ def suggest_banner_cut(image_path: Path, position: str, known_hashes: list, thre
             best_dist = min_dist
             best_banner_height_pct = pct
             best_hash_idx = int(distances.argmin())
-        pct += step_pct
 
     img.close()
 
     if best_dist is None or best_dist > threshold:
         return None
 
-    # Convert "banner height from edge" to "Y position from top", matching the
-    # convention used by manual marker placement and crop_remove_banner.
     cut_y_pct = best_banner_height_pct if position == 'top' else (100 - best_banner_height_pct)
     return cut_y_pct, known_hashes[best_hash_idx]
 
 def compute_banner_slice_hash(image_path: Path, cut_percent: float, side: str):
-    """Computes the perceptual hash of just the top/bottom slice of an image at
-    the given marker position (Y-from-top, same convention as crop_remove_banner)
-    WITHOUT modifying the source file. Used by the standalone hash-maintenance
-    tool to learn a banner hash from a throwaway reference upload."""
+    """Computes the perceptual hash of just the top/bottom slice at
+    cut_percent (Y-from-top), without modifying the source file. Used by the
+    hash-maintenance tool to learn a banner hash from a reference upload."""
     try:
         img = Image.open(image_path)
         img.load()
@@ -388,19 +373,13 @@ def compute_banner_slice_hash(image_path: Path, cut_percent: float, side: str):
         return None
 
 def crop_remove_banner(image_path: Path, cut_percent: float, remove_side: str):
-    """Crops out a banner slice using cut_percent as the marker's Y position measured
-    from the TOP of the image (0-100), matching how markers are placed by clicking
-    on the image in the split tool - regardless of remove_side.
-    - remove_side='top': removes everything ABOVE the marker (rows 0..marker),
-      keeps everything below.
-    - remove_side='bottom': removes everything BELOW the marker (rows marker..end),
-      keeps everything above.
-    Overwrites image_path with the remaining content, and returns the phash (hex
-    string) of the removed slice, or None on failure.
+    """Crops out a banner slice at cut_percent (Y-from-top) and overwrites
+    image_path with the remainder. remove_side='top' drops everything above
+    the marker, 'bottom' drops everything below. Returns the removed slice's
+    phash, or None on failure.
 
-    NOTE: this overwrites image_path in place. Callers that want the pre-crop
-    version recoverable (see web_ui.py's /api_remove_banner) must back it up
-    to the trash themselves BEFORE calling this."""
+    Caller must back up the pre-crop file themselves (e.g. to the trash)
+    before calling this -- the original is not recoverable afterward."""
     try:
         img = Image.open(image_path)
         img.load()
@@ -424,8 +403,8 @@ def crop_remove_banner(image_path: Path, cut_percent: float, remove_side: str):
         return None
 
 def load_credit_hashes(path: Path) -> list:
-    """Load known 'credit page' perceptual hashes (hex strings) from a JSON file.
-    Returns an empty list if the file doesn't exist yet or is unreadable."""
+    """Loads known 'credit page' phashes (hex strings). Returns an empty
+    list if the file doesn't exist yet or is unreadable."""
     if not path.exists():
         return []
     try:
@@ -440,7 +419,7 @@ def load_credit_hashes(path: Path) -> list:
         return []
 
 def save_credit_hashes(path: Path, hashes: list):
-    """Persist known 'credit page' perceptual hashes (hex strings) to a JSON file."""
+    """Persists known 'credit page' phashes to a JSON file."""
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         # Deduplicate while preserving order.
@@ -451,8 +430,8 @@ def save_credit_hashes(path: Path, hashes: list):
         logging.error(f"Failed to save credit hashes to {path}: {e}")
 
 def compute_phash(image_path: Path):
-    """Compute the perceptual hash (phash) of an image as a hex string.
-    Returns None if the image can't be opened/read."""
+    """Computes an image's perceptual hash as a hex string, or None if it
+    can't be opened/read."""
     try:
         with Image.open(image_path) as img:
             return str(imagehash.phash(img))
@@ -461,10 +440,9 @@ def compute_phash(image_path: Path):
         return None
 
 def _stack_hashes(hash_hex_list: list):
-    """Converts a list of hex-string perceptual hashes into a single 2D numpy
-    boolean array (one row per hash) for fast vectorized Hamming-distance
-    computation against many known hashes at once. Returns None if the list is
-    empty or contains no valid hashes."""
+    """Converts hex-string phashes into one 2D boolean numpy array (one row
+    per hash), for vectorized Hamming-distance comparisons. Returns None if
+    the list is empty or has no valid hashes."""
     rows = []
     for hex_str in hash_hex_list:
         try:
@@ -474,10 +452,8 @@ def _stack_hashes(hash_hex_list: list):
     return np.array(rows) if rows else None
 
 def is_known_credit_hash(image_hash_hex: str, known_hashes: list, threshold: int) -> bool:
-    """Check whether image_hash_hex is within `threshold` Hamming distance of any
-    hash in known_hashes (both as hex strings from imagehash). Vectorized so the
-    cost stays negligible even as the known-hash database grows into the
-    thousands."""
+    """Returns whether image_hash_hex is within `threshold` Hamming distance
+    of any hash in known_hashes."""
     if not image_hash_hex or not known_hashes:
         return False
     try:
@@ -491,14 +467,9 @@ def is_known_credit_hash(image_hash_hex: str, known_hashes: list, threshold: int
     return bool(distances.min() <= threshold)
 
 def find_known_credit_match(image_hash_hex: str, known_hashes: list, threshold: int):
-    """Like is_known_credit_hash(), but returns the specific known hash (hex
-    string) that matched within `threshold`, instead of just a bool. Used
-    whenever the caller needs to know exactly WHICH database entry produced
-    the match -- e.g. so the Web UI can offer a one-click "delete this hash"
-    action directly on a false-positive "Known credit" tag, without the user
-    having to hunt for it manually in the Hash Maintenance tool.
-
-    Returns None if there's no match within threshold, or on any error."""
+    """Like is_known_credit_hash(), but returns the specific matching hash
+    (hex string) instead of a bool, so callers can offer to delete that exact
+    database entry. Returns None if there's no match within threshold."""
     if not image_hash_hex or not known_hashes:
         return None
     try:
@@ -515,16 +486,10 @@ def find_known_credit_match(image_hash_hex: str, known_hashes: list, threshold: 
     return None
 
 def find_redundant_clusters(hash_list: list, threshold: int):
-    """Groups the indices of hash_list into clusters using single-linkage
-    clustering: two hashes end up in the same cluster if there's a chain of
-    hashes between them where each consecutive pair is within `threshold`
-    Hamming distance of each other. This surfaces near-duplicate hashes
-    (accumulated e.g. from minor marker adjustments across sessions) without
-    needing any visual/image representation - purely from the hash values.
-
-    Returns (clusters, dist_matrix) where clusters is a list of lists of
-    indices into hash_list (singletons included), and dist_matrix is an NxN
-    numpy array of pairwise Hamming distances (None if hash_list is empty)."""
+    """Single-linkage clusters hash_list's indices: two hashes share a
+    cluster if a chain of within-threshold neighbors connects them. O(n^2)
+    in time and memory -- fine for hundreds of hashes, but costly if the
+    database grows into the thousands. Returns (clusters, dist_matrix)."""
     n = len(hash_list)
     if n == 0:
         return [], None
@@ -564,28 +529,16 @@ def find_redundant_clusters(hash_list: list, threshold: int):
 
 
 # ---------------------------------------------------------------------------
-# Trash
-#
-# Every interactive deletion made during Step 2 (manual delete, credit-page
-# deletion, the original image consumed by a split, the two halves consumed
-# by a merge, the pre-crop original consumed by a banner removal) goes
-# through send_to_trash() instead of Path.unlink(). Nothing is permanently
-# lost until the trash itself is purged -- either manually from the /trash
-# web page, or automatically at the very start of the NEXT Step 2 run (see
-# workflow.step_2_web_ui), which keeps the trash from growing unbounded
-# across sessions while still giving the user a full session to notice and
-# undo a mistake.
-#
-# A JSON manifest (trash_index.json, inside trash_dir) tracks each trashed
-# file's original absolute path, why it was trashed, and when, so a restore
-# can put it back exactly where it came from.
+# Trash: every Step 2 deletion goes through send_to_trash() instead of
+# Path.unlink(). A JSON manifest (trash_index.json) tracks each entry's
+# original path, reason, and timestamp, so a restore can put it back exactly
+# where it came from. Auto-purged at the start of the next Step 2 run.
 # ---------------------------------------------------------------------------
 
 TRASH_INDEX_FILENAME = "trash_index.json"
 
-# Human-readable labels for the internal reason codes, used by the /trash
-# web page. Keep in sync with the reason strings passed to send_to_trash()
-# throughout web_ui.py.
+# Human-readable labels for the /trash page. Keep in sync with the reason
+# strings passed to send_to_trash() throughout web_ui.py.
 TRASH_REASON_LABELS = {
     "manual_delete": "Deleted manually",
     "credit_page": "Deleted as credit page",
@@ -596,7 +549,7 @@ TRASH_REASON_LABELS = {
 }
 
 def load_trash_index(trash_dir: Path) -> list:
-    """Load the trash manifest. Returns an empty list if trash_dir or the
+    """Loads the trash manifest. Returns an empty list if trash_dir or the
     index file doesn't exist yet, or is unreadable."""
     index_path = trash_dir / TRASH_INDEX_FILENAME
     if not index_path.exists():
@@ -610,7 +563,7 @@ def load_trash_index(trash_dir: Path) -> list:
         return []
 
 def save_trash_index(trash_dir: Path, entries: list):
-    """Persist the trash manifest."""
+    """Persists the trash manifest."""
     index_path = trash_dir / TRASH_INDEX_FILENAME
     try:
         trash_dir.mkdir(parents=True, exist_ok=True)
@@ -620,32 +573,25 @@ def save_trash_index(trash_dir: Path, entries: list):
         logging.error(f"Failed to save trash index to {index_path}: {e}")
 
 def _generate_trash_name(original_path: Path) -> str:
-    """Builds a unique trash filename that still ends in the original
-    extension (so served thumbnails keep working) while avoiding collisions
-    between same-named files from different chapters."""
+    """Builds a unique trash filename (keeps the original extension so
+    thumbnails still work) to avoid collisions between same-named files."""
     timestamp = datetime.now().strftime('%Y%m%d-%H%M%S')
     unique = uuid.uuid4().hex[:8]
     return f"{timestamp}_{unique}_{original_path.name}"
 
 def send_to_trash(file_path: Path, trash_dir: Path, reason: str, mode: str = "move") -> bool:
-    """Moves (mode='move', the default) or copies (mode='copy') file_path
-    into trash_dir and records it in the manifest so it can be restored later.
-
-    mode='copy' is for operations that overwrite a file in place (e.g. banner
-    cropping): the original content needs a backup in the trash *before* the
-    overwrite happens, while file_path itself must still exist afterward for
-    the caller to write the new content into.
-
-    Returns True on success. On failure, file_path is left completely
-    untouched (shutil.move/copy either succeeds or raises without partially
-    deleting the source) -- so a failed trash attempt never means data loss,
-    it just means the caller should treat it like any other failed delete."""
+    """Moves (default) or copies file_path into trash_dir and records it in
+    the manifest. On failure, file_path is left untouched. Returns True on
+    success."""
     try:
         trash_dir.mkdir(parents=True, exist_ok=True)
         trash_name = _generate_trash_name(file_path)
         trash_path = trash_dir / trash_name
 
         if mode == "copy":
+            # Used when the caller needs to overwrite file_path in place
+            # right after (e.g. banner cropping): back up first, keep the
+            # original path alive for the overwrite.
             shutil.copy2(str(file_path), str(trash_path))
         else:
             shutil.move(str(file_path), str(trash_path))
@@ -665,12 +611,9 @@ def send_to_trash(file_path: Path, trash_dir: Path, reason: str, mode: str = "mo
         return False
 
 def restore_from_trash(trash_name: str, trash_dir: Path):
-    """Restores one trashed file back to its recorded original location.
-    If the original folder no longer exists (renamed/moved/deleted since),
-    it's recreated. If a file already sits at the exact original path, the
-    restored file is given a conflict-safe name instead of overwriting it.
-    Returns (success: bool, message: str) -- message is either the restored
-    path (on success) or a human-readable reason (on failure)."""
+    """Restores one trashed file to its recorded original location
+    (recreating the folder if needed, conflict-safe renaming if something
+    already sits there). Returns (success, message)."""
     index = load_trash_index(trash_dir)
     entry = next((e for e in index if e.get('trash_name') == trash_name), None)
     if entry is None:
@@ -678,9 +621,8 @@ def restore_from_trash(trash_name: str, trash_dir: Path):
 
     trash_path = trash_dir / trash_name
     if not trash_path.exists():
-        # Manifest references a file that's no longer physically there
-        # (manually removed from disk?) -- drop the stale entry so it stops
-        # showing up in the /trash page.
+        # Manifest references a file no longer physically present: drop the
+        # stale entry so it stops showing up in /trash.
         save_trash_index(trash_dir, [e for e in index if e.get('trash_name') != trash_name])
         return False, "File missing from the trash folder (index entry removed)."
 
@@ -701,8 +643,7 @@ def restore_from_trash(trash_name: str, trash_dir: Path):
 
 def purge_trash(trash_dir: Path) -> int:
     """Permanently empties the trash (files + manifest). Safe to call when
-    trash_dir doesn't exist yet (first run). Returns the number of files
-    actually removed, for a console/UI summary."""
+    trash_dir doesn't exist yet. Returns the number of files removed."""
     if not trash_dir.exists():
         return 0
 
@@ -717,8 +658,8 @@ def purge_trash(trash_dir: Path) -> int:
         except Exception as e:
             logging.error(f"Failed to purge trashed file {trash_path}: {e}")
 
-    # Defensive sweep: also remove any file physically present in trash_dir
-    # but missing from the manifest (e.g. after a manual index edit).
+    # Defensive sweep: also remove files present on disk but missing from
+    # the manifest (e.g. after a manual index edit).
     try:
         for f in trash_dir.iterdir():
             if f.is_file() and f.name != TRASH_INDEX_FILENAME:
