@@ -28,7 +28,9 @@ im_timeout: 20
 web_port: 5002  # Shared by the main Web UI and the standalone hash_maintenance.py tool.
                 # If already taken (e.g. both running at once), the next free port is used automatically.
 web_ui_network_access: false
-mobile_mini_mode: false 
+web_ui_pin: "1234"  # PIN asked once per session from clients connecting via a non-127.0.0.1 address.
+                    # Mandatory when web_ui_network_access is true; ignored otherwise.
+mobile_mini_mode: false
 thumb_size: "220px"
 
 # Workflow Steps Activation

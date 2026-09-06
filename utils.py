@@ -1,7 +1,7 @@
 """
 Copyscan-AllInOne - shared utility functions.
 
-Covers: config path resolution, port/host resolution for the Web UI,
+Covers: config path resolution, port/host/PIN resolution for the Web UI,
 environment/logging setup, keyboard shortcut resolution, natural sort and
 folder traversal helpers, safe folder merging, perceptual-hash based
 credit-page/banner detection (via imagehash + numpy), and the trash
@@ -17,6 +17,10 @@ import re
 import json
 import socket
 import uuid
+import hmac
+import secrets
+import time
+import ipaddress
 from datetime import datetime
 from pathlib import Path
 from rich.console import Console
@@ -53,8 +57,9 @@ def find_free_port(start_port: int, host: str = '127.0.0.1', max_attempts: int =
 
 def resolve_web_ui_host(config: dict) -> str:
     """Resolves the Web UI bind host from config.yaml's `web_ui_network_access`
-    (default False = localhost-only). Prints a security warning when network
-    access is enabled, since the UI has no authentication."""
+    (default False = localhost-only). When network access is enabled, a PIN
+    (`web_ui_pin`) is mandatory: clients connecting from a non-loopback
+    address are asked for it (see setup_pin_protection below)."""
     network_access = config.get('web_ui_network_access', False)
 
     if not isinstance(network_access, bool):
@@ -65,14 +70,83 @@ def resolve_web_ui_host(config: dict) -> str:
         return '127.0.0.1'
 
     if network_access:
+        if not resolve_web_ui_pin(config):
+            console.print(
+                "[bold red]Error: 'web_ui_network_access' is enabled but 'web_ui_pin' is "
+                "missing or empty in config.yaml.[/bold red]"
+            )
+            console.print(
+                "[yellow]Set 'web_ui_pin' to the code asked of any device connecting from "
+                "your network (127.0.0.1 access never asks for it), or set "
+                "'web_ui_network_access: false' to stay localhost-only.[/yellow]"
+            )
+            sys.exit(1)
         console.print(
             "[bold red]⚠ Web UI network access is ENABLED: the server will bind to 0.0.0.0 "
-            "and be reachable from other devices on your network. There is no authentication "
-            "-- anyone who can reach this port can delete, merge, or split your files.[/bold red]"
+            "and be reachable from other devices on your network. Those devices must enter "
+            "the PIN from 'web_ui_pin' before they can do anything.[/bold red]"
         )
         return '0.0.0.0'
 
     return '127.0.0.1'
+
+
+def resolve_web_ui_pin(config: dict):
+    """Returns the normalized Web UI PIN from config.yaml's `web_ui_pin`
+    (number or string, stripped of whitespace), or None when unset/empty."""
+    pin = config.get('web_ui_pin')
+    if pin is None or isinstance(pin, bool):
+        return None
+    if not isinstance(pin, (str, int)):
+        console.print(
+            "[yellow]Warning: 'web_ui_pin' must be a number or a string in config.yaml; "
+            "PIN protection is disabled.[/yellow]"
+        )
+        return None
+    return str(pin).strip() or None
+
+
+def setup_pin_protection(app, pin):
+    """Installs the PIN gate on a Flask app (main Web UI and hash maintenance
+    tool alike): every request from a non-loopback client must have entered
+    the PIN once -- the acceptance is remembered in a signed session cookie
+    for the server's lifetime (re-asked after a restart). Requests from
+    127.0.0.1/::1 are never gated, so working on the machine itself stays
+    friction-free."""
+    from flask import request, session, redirect, render_template, jsonify
+
+    # Fresh secret at every launch: cookies from a previous run are invalid,
+    # forcing remote clients to re-enter the PIN once per session.
+    app.secret_key = secrets.token_hex(32)
+
+    def is_loopback(addr):
+        try:
+            return ipaddress.ip_address(addr).is_loopback
+        except ValueError:
+            return False
+
+    @app.before_request
+    def _pin_gate():
+        if is_loopback(request.remote_addr) or session.get('pin_ok'):
+            return None
+        if request.endpoint == '_pin_verify':
+            return None
+        if request.method == 'GET':
+            return render_template('pin.html'), 401
+        return jsonify({"status": "error", "message": "PIN required."}), 401
+
+    @app.route('/pin_verify', methods=['POST'])
+    def _pin_verify():
+        entered = request.form.get('pin') or (request.get_json(silent=True) or {}).get('pin') or ''
+        # Encoded to bytes so compare_digest also accepts non-ASCII input.
+        if hmac.compare_digest(str(entered).strip().encode('utf-8'), str(pin).strip().encode('utf-8')):
+            session['pin_ok'] = True
+            logging.info(f"PIN accepted for client {request.remote_addr}")
+            return redirect('/')
+        # Slow down brute-force attempts and leave a trace in the log.
+        logging.warning(f"Failed PIN attempt from client {request.remote_addr}")
+        time.sleep(1.5)
+        return render_template('pin.html', error=True), 401
 
 
 def get_local_ip() -> str:

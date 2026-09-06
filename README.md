@@ -163,7 +163,7 @@ The trash is automatically purged at the start of every Step 2 run — so anythi
 python hash_maintenance.py
 ```
 
-* Reads `credit_hashes_path`, `credit_banners_path`, `credit_hash_threshold`, `credit_banner_threshold`, `web_ui_network_access`, and `web_port` from `config.yaml` next to the script by default (`--config <path>` to point elsewhere; `--credit-hashes-path`, `--credit-banners-path`, `--credit-hash-threshold`, `--credit-banner-threshold`, `--network`, `--port` to override individually without touching the file).
+* Reads `credit_hashes_path`, `credit_banners_path`, `credit_hash_threshold`, `credit_banner_threshold`, `web_ui_network_access`, `web_ui_pin`, and `web_port` from `config.yaml` next to the script by default (`--config <path>` to point elsewhere; `--credit-hashes-path`, `--credit-banners-path`, `--credit-hash-threshold`, `--credit-banner-threshold`, `--network`, `--port` to override individually without touching the file).
 * **Add a hash**: a single upload/drop zone accepts any reference image. It then opens the same Split tool used by the main workflow, letting you either **validate the whole image as-is** (added to the credit-page database) or **mark a top/bottom slice** and confirm it as a banner (added to the corresponding banner database) — no need to pick a category up front.
 * **Review & prune**: each database is listed as a table. Near-duplicate hashes are automatically clustered by Hamming distance and tagged (e.g. "cluster #2 (3)"), with a one-click "Select redundant duplicates" action to pre-check every member but the first in each cluster before deleting.
 * On startup, the console prints the exact resolved path of the config file and both hash databases.
@@ -205,7 +205,8 @@ python local.py
 | `supported_extensions` | File extensions treated as images throughout the workflow. |
 | `sleep_time` / `im_timeout` | Pause between steps (s) / ImageMagick per-file timeout (s). |
 | `web_port` | Port shared by the Web UI and the Hash Maintenance tool (next free port used on collision). |
-| `web_ui_network_access` | `false` (default) binds the Web UI to `127.0.0.1` only; `true` binds `0.0.0.0` to reach it from other devices — unauthenticated, so LAN-only and at your own risk. |
+| `web_ui_network_access` | `false` (default) binds the Web UI to `127.0.0.1` only; `true` binds `0.0.0.0` to reach it from other devices. |
+| `web_ui_pin` | PIN asked once per session from clients connecting via a non-`127.0.0.1` address. **Required** when `web_ui_network_access` is `true` (the run refuses to start without it); ignored otherwise. |
 | `mobile_mini_mode` | `true` forces the compact mobile layout everywhere in the Web UI (it also activates automatically on portrait screens). |
 | `thumb_size` | Thumbnail size used across the Web UI. |
 | `steps_active` | Per-step on/off switches (`step_1` … `step_9`). |
@@ -222,7 +223,8 @@ python local.py
 * **Invalid or incomplete `config.yaml`**: The script exits immediately with the list of missing/mistyped keys — check against `config.example.yaml`.
 * **AVIF Issues**: Verify that your ImageMagick installation includes `libavif` support if Step 1 fails on valid files.
 * **Locked Files**: Ensure no external programs (viewers, file explorers) are locking your directories during the workflow.
-* **Web UI unreachable**: The server binds to `127.0.0.1:<web_port>` by default — set `web_ui_network_access: true` to open it to your network. If `web_port` is already taken (e.g. the Hash Maintenance tool is already running), the next free port is used automatically and printed to the console at startup — check there for the actual URL if it's not the one you expected.
+* **Web UI unreachable**: The server binds to `127.0.0.1:<web_port>` by default — set `web_ui_network_access: true` (plus `web_ui_pin`) to open it to your network. If `web_port` is already taken (e.g. the Hash Maintenance tool is already running), the next free port is used automatically and printed to the console at startup — check there for the actual URL if it's not the one you expected.
+* **Run refuses to start with "web_ui_pin is missing"**: network access was enabled without a PIN — set `web_ui_pin` in `config.yaml` (asked of remote devices only, never from `127.0.0.1`), or set `web_ui_network_access: false`. Remote clients entering a wrong PIN get a 1.5 s delay per attempt, and every failed attempt is written to the log.
 * **Deleted something by mistake**: open the 🗑 Trash page from the main gallery and restore it — entries stay recoverable until the next run's Step 2 purges the trash.
 * **Hash Maintenance tool shows unexpected/missing hashes**: this is almost always a path mismatch — the tool defaults to the `config.yaml` sitting next to `hash_maintenance.py`. Check the console output at startup: it prints the exact config file and both database paths it resolved, plus how many hashes were loaded from each.
 * **Logging**: Every operation is logged in the path specified by `log_path` in `config.yaml` (UTF-8 encoded), unless `log_enabled` is set to `false`. The destination folder is created automatically if missing; use `--log-path` to override the location for a single run.
@@ -233,5 +235,5 @@ python local.py
 ## Security Notice
 
 * All operations are **non-destructive** by default logic: suffix-safe renaming resolves naming conflicts, Web UI deletions go through a restorable trash bin, and the destination folder is never automatically cleaned by the tool.
-* The Web UI server is bound to `127.0.0.1` only. `web_ui_network_access: true` opens it to the network (`0.0.0.0`) — the interface has **no authentication** and exposes destructive actions (deletion, fusion, split), so a clear warning is printed at startup; only enable it on a trusted LAN. The standalone Hash Maintenance tool follows the same rule (also openable via its `--network` flag).
+* The Web UI server is bound to `127.0.0.1` only. `web_ui_network_access: true` opens it to the network (`0.0.0.0`), protected by the PIN from `web_ui_pin`: every client connecting via a non-`127.0.0.1` address must enter it once per server session (signed session cookie, re-asked after each restart), while local access never asks. Enabling network access without a configured PIN stops the run at startup. Failed attempts are logged and slowed down (1.5 s each). The standalone Hash Maintenance tool follows the same rule (also openable via its `--network` flag).
 * `mask_security_popups: true` auto-accepts every confirmation dialog in the Web UI (including destructive actions like deletions and splits) — only enable it once you trust your review workflow, since it removes the "are you sure?" safety net.

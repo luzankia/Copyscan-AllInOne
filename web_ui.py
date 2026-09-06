@@ -22,7 +22,8 @@ from utils import (
     find_known_credit_match,
     load_credit_banners, save_credit_banners, suggest_banner_cut, crop_remove_banner,
     natural_sort_key as get_natural_key, DEFAULT_KEYBOARD_SHORTCUTS,
-    send_to_trash, load_trash_index, restore_from_trash, purge_trash, TRASH_REASON_LABELS
+    send_to_trash, load_trash_index, restore_from_trash, purge_trash, TRASH_REASON_LABELS,
+    setup_pin_protection
 )
 
 BaseWSGIServer.allow_reuse_address = False
@@ -46,12 +47,17 @@ TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
 def start_web_ui(images_list, host, port, thumb_size, supported_extensions, mask_popups=False,
                   credit_hashes_path=None, credit_hash_threshold=8,
                   credit_banners_path=None, credit_banner_threshold=10,
-                  shortcuts=None, trash_dir=None, mobile_mini_mode=False):
-    
+                  shortcuts=None, trash_dir=None, mobile_mini_mode=False, web_pin=None):
+
     """Starts the Flask server for manual sorting, merging, and image splitting."""
     app = Flask(__name__, template_folder=str(TEMPLATES_DIR))
     completion_event = threading.Event()
     shortcuts = shortcuts or DEFAULT_KEYBOARD_SHORTCUTS
+
+    # PIN gate for network-access mode: only ever triggers for clients
+    # connecting from outside this machine (see setup_pin_protection).
+    if web_pin:
+        setup_pin_protection(app, web_pin)
 
     # Defensive fallback: workflow.py always passes a resolved trash_dir, so
     # this should never trigger -- but a broken default is safer than a

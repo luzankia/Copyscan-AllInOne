@@ -28,7 +28,8 @@ from utils import (
     console, load_credit_hashes, save_credit_hashes, load_credit_banners,
     save_credit_banners, compute_phash, is_known_credit_hash, find_redundant_clusters,
     compute_banner_slice_hash, find_free_port, resolve_project_path,
-    resolve_web_ui_host, get_local_ip, DEFAULT_KEYBOARD_SHORTCUTS
+    resolve_web_ui_host, resolve_web_ui_pin, setup_pin_protection, get_local_ip,
+    DEFAULT_KEYBOARD_SHORTCUTS
 )
 
 BaseWSGIServer.allow_reuse_address = False
@@ -59,6 +60,7 @@ def load_settings(config_path, cli_args) -> dict:
         'credit_banner_threshold': cli_args.credit_banner_threshold or config.get('credit_banner_threshold', 16),
         'port': cli_args.port or config.get('web_port', 5051),
         'web_ui_network_access': cli_args.network or bool(config.get('web_ui_network_access', False)),
+        'web_ui_pin': resolve_web_ui_pin(config),
     }
 
     missing = [k for k in ('credit_hashes_path', 'credit_banners_path') if not settings[k]]
@@ -106,8 +108,14 @@ def build_section(title: str, bucket: str, hash_list: list, threshold: int) -> d
 
 
 def create_app(credit_hashes_path: Path, credit_banners_path: Path,
-               credit_hash_threshold: int, credit_banner_threshold: int) -> Flask:
+               credit_hash_threshold: int, credit_banner_threshold: int,
+               web_pin=None) -> Flask:
     app = Flask(__name__, template_folder=str(TEMPLATES_DIR))
+
+    # PIN gate for network-access mode: only ever triggers for clients
+    # connecting from outside this machine (see setup_pin_protection).
+    if web_pin:
+        setup_pin_protection(app, web_pin)
 
     credit_hashes = load_credit_hashes(credit_hashes_path)
     known_banners = load_credit_banners(credit_banners_path)
@@ -299,11 +307,13 @@ def main():
         credit_banners_path,
         settings['credit_hash_threshold'],
         settings['credit_banner_threshold'],
+        settings['web_ui_pin'],
     )
     console.print(f"[cyan]Loaded:[/cyan] {len(load_credit_hashes(credit_hashes_path))} credit page hash(es), "
                   f"{sum(len(v) for v in load_credit_banners(credit_banners_path).values())} banner hash(es)")
-    
-    host = resolve_web_ui_host({'web_ui_network_access': settings['web_ui_network_access']})
+
+    host = resolve_web_ui_host({'web_ui_network_access': settings['web_ui_network_access'],
+                                'web_ui_pin': settings['web_ui_pin']})
 
     port = find_free_port(settings['port'], host=host)
     if port != settings['port']:
