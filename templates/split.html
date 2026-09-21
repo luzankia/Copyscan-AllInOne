@@ -341,7 +341,16 @@
 
         function removeBanner(side) {
             if (cutsH.length !== 1) {
-                alertMsg("Place exactly one horizontal marker at the banner boundary first (clear markers if there's more than one).");
+                if (mode !== 'h' || cutsV.length > 0) {
+                    // Le toggle H/V (persisté en localStorage entre les pages) était
+                    // resté en Vertical : le marqueur a atterri dans cutsV au lieu de
+                    // cutsH, donc la validation échouait silencieusement.
+                    clearMarkers();
+                    setMode('h');
+                    alert("Le mode était en Vertical (V) : le marqueur n'était donc pas utilisable pour la bannière. Mode repassé en Horizontal (H) — replace ton marqueur puis reclique sur Remove Above/Below.");
+                } else {
+                    alertMsg("Place exactly one horizontal marker at the banner boundary first (clear markers if there's more than one).");
+                }
                 return;
             }
             const label = side === 'top' ? 'above' : 'below';
