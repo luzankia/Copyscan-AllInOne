@@ -155,7 +155,7 @@
                         {% if item.banner_suggestion %}<div class="banner-tag" onclick="openSplit(event, '{{ item.b64 }}', {{ item.banner_suggestion.cut_pct }}, '{{ item.banner_suggestion.position }}', '{{ item.banner_suggestion.hash }}')" title="Detected a likely embedded credit banner ({{ item.banner_suggestion.position }}) — click to review in the split tool">📎</div>{% endif %}
                     </div>
                     <div class="img-wrap">
-                        <img src="/image/{{ item.b64 }}" loading="lazy" />
+                          <img src="/thumb/{{ item.b64 }}" {% if item.w %}width="{{ item.w }}" height="{{ item.h }}"{% endif %} loading="lazy" decoding="async" />
                         <div class="select-veil"></div>
                     </div>
                     <div class="card-label"><span class="label-text" id="label-{{ item.b64 }}" onclick="startRename(event, '{{ item.b64 }}')">{{ item.display_name }}</span></div>
@@ -168,7 +168,7 @@
             {% else %}
                 <div class="card approved" id="card-{{ item.b64 }}" data-b64="{{ item.b64 }}" onclick="toggleReject('{{ item.b64 }}')">
                     <div class="img-wrap">
-                        <img src="/image/{{ item.b64 }}" loading="lazy" />
+                          <img src="/thumb/{{ item.b64 }}" {% if item.w %}width="{{ item.w }}" height="{{ item.h }}"{% endif %} loading="lazy" decoding="async" />
                     </div>
                     <div class="card-label">{{ item.display_name }}</div>
 					<div class="tooltip">

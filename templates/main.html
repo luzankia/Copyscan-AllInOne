@@ -68,7 +68,7 @@
             <div class="card" id="card-{{ item.b64 }}" onclick="openEditor(event, '{{ item.b64 }}')">
                 <div class="edit-icon" title="Open leaf folder manager">✏️</div>
                 {% if item.is_credit_match %}<div class="credit-tag" title="Matches a known credit page">🏷️</div>{% endif %}
-                <img src="/image/{{ item.b64 }}" loading="lazy" />
+                  <img src="/thumb/{{ item.b64 }}" {% if item.w %}width="{{ item.w }}" height="{{ item.h }}"{% endif %} loading="lazy" decoding="async" />
                 <div class="card-label">
                     <div class="label-main">{{ item.chapter }}</div>
                     <div class="label-sub">{{ item.serie }} · {{ item.site }}</div>

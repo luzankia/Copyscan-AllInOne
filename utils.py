@@ -4,8 +4,9 @@ Copyscan-AllInOne - shared utility functions.
 Covers: config path resolution, port/host/PIN resolution for the Web UI,
 environment/logging setup, keyboard shortcut resolution, natural sort and
 folder traversal helpers, safe folder merging, perceptual-hash based
-credit-page/banner detection (via imagehash + numpy), and the trash
-(recycle bin) system used by every Step 2 deletion.
+credit-page/banner detection (via imagehash + numpy, with per-file caches so
+reloading a chapter page stays fast), on-disk thumbnails for the Web UI
+galleries, and the trash (recycle bin) system used by every Step 2 deletion.
 """
 
 import os
@@ -20,6 +21,8 @@ import uuid
 import hmac
 import secrets
 import time
+import hashlib
+import tempfile
 import ipaddress
 from datetime import datetime
 from pathlib import Path
@@ -377,57 +380,86 @@ def save_credit_banners(path: Path, banners: dict):
     except Exception as e:
         logging.error(f"Failed to save credit banners to {path}: {e}")
 
+# (path, mtime_ns, size, position, min_pct, max_pct, step_pct)
+#   -> (heights_pct, bit_matrix) | None
+# The key changes whenever the file is modified, so entries never go stale.
+_BANNER_CANDIDATES_CACHE = {}
+
+def get_banner_candidates(image_path: Path, position: str,
+                          min_pct: float = 3, max_pct: float = 35, step_pct: float = 0.5):
+    """Perceptual hashes of every candidate banner slice at the given edge
+    ('top'/'bottom'), returned as (heights_pct, bit_matrix) with one matrix
+    row per candidate height, or None if the image can't be read.
+
+    The expensive part of banner detection (one decode + ~64 crop/phash)
+    depends only on the image, not on the known-banner database, so it is
+    cached per (path, mtime, size). Matching against the database is then a
+    cheap numpy comparison that always reflects the current database."""
+    try:
+        stat = image_path.stat()
+    except OSError:
+        return None
+
+    key = (str(image_path), stat.st_mtime_ns, stat.st_size, position, min_pct, max_pct, step_pct)
+    if key in _BANNER_CANDIDATES_CACHE:
+        return _BANNER_CANDIDATES_CACHE[key]
+
+    result = None
+    try:
+        with Image.open(image_path) as img:
+            img.load()
+            width, height = img.size
+            pcts, rows = [], []
+            # Steps are computed from the loop index (not accumulated via +=)
+            # to avoid floating-point drift across ~64 iterations.
+            step_count = int(round((max_pct - min_pct) / step_pct)) + 1
+            for i in range(step_count):
+                pct = min_pct + i * step_pct
+                cut_px = max(1, min(height - 1, int(height * pct / 100)))
+                box = (0, 0, width, cut_px) if position == 'top' else (0, height - cut_px, width, height)
+                try:
+                    rows.append(imagehash.phash(img.crop(box)).hash.flatten())
+                except Exception:
+                    continue
+                pcts.append(pct)
+        if rows:
+            result = (pcts, np.array(rows))
+    except Exception as e:
+        logging.warning(f"Could not open {image_path} for banner detection: {e}")
+
+    _BANNER_CANDIDATES_CACHE[key] = result
+    return result
+
 def suggest_banner_cut(image_path: Path, position: str, known_hashes: list, threshold: int,
                         min_pct: float = 3, max_pct: float = 35, step_pct: float = 0.5):
-    """Sweeps candidate banner heights near the given edge ('top'/'bottom')
-    looking for the best match against known_hashes. Returns (cut_pct,
+    """Looks for the best match between candidate banner heights near the
+    given edge ('top'/'bottom') and known_hashes. Returns (cut_pct,
     matched_hash) using the same Y-from-top convention as manual markers, or
     None if nothing matches within threshold."""
     if not known_hashes:
         return None
-    try:
-        img = Image.open(image_path)
-        img.load()
-    except Exception as e:
-        logging.warning(f"Could not open {image_path} for banner detection: {e}")
-        return None
-
-    width, height = img.size
     known_matrix = _stack_hashes(known_hashes)
     if known_matrix is None:
-        img.close()
         return None
 
-    # Banner height is unknown in advance, hence the sweep instead of a
-    # fixed offset. pct here is a candidate HEIGHT from the edge, converted
-    # to a Y-from-top position only once the best match is found below.
-    # Steps are computed from the loop index (not accumulated via +=) to
-    # avoid floating-point drift across ~64 iterations.
-    best_banner_height_pct, best_dist, best_hash_idx = None, None, None
-    step_count = int(round((max_pct - min_pct) / step_pct)) + 1
-    for i in range(step_count):
-        pct = min_pct + i * step_pct
-        cut_px = max(1, min(height - 1, int(height * pct / 100)))
-        box = (0, 0, width, cut_px) if position == 'top' else (0, height - cut_px, width, height)
-        try:
-            candidate = imagehash.phash(img.crop(box)).hash.flatten()
-        except Exception:
-            continue
+    candidates = get_banner_candidates(image_path, position, min_pct, max_pct, step_pct)
+    if candidates is None:
+        return None
+    pcts, candidate_matrix = candidates
 
-        distances = np.count_nonzero(known_matrix != candidate, axis=1)
-        min_dist = int(distances.min())
-        if best_dist is None or min_dist < best_dist:
-            best_dist = min_dist
-            best_banner_height_pct = pct
-            best_hash_idx = int(distances.argmin())
-
-    img.close()
-
-    if best_dist is None or best_dist > threshold:
+    # (candidates, known, bits) -> Hamming distance for every pair. Ties
+    # resolve to the first candidate height, then the first known hash,
+    # same as the previous sweep-based implementation.
+    distances = np.count_nonzero(
+        candidate_matrix[:, None, :] != known_matrix[None, :, :], axis=2
+    )
+    cand_idx, hash_idx = (int(v) for v in np.unravel_index(int(distances.argmin()), distances.shape))
+    if distances[cand_idx, hash_idx] > threshold:
         return None
 
-    cut_y_pct = best_banner_height_pct if position == 'top' else (100 - best_banner_height_pct)
-    return cut_y_pct, known_hashes[best_hash_idx]
+    banner_height_pct = pcts[cand_idx]
+    cut_y_pct = banner_height_pct if position == 'top' else (100 - banner_height_pct)
+    return cut_y_pct, known_hashes[hash_idx]
 
 def compute_banner_slice_hash(image_path: Path, cut_percent: float, side: str):
     """Computes the perceptual hash of just the top/bottom slice at
@@ -503,15 +535,32 @@ def save_credit_hashes(path: Path, hashes: list):
     except Exception as e:
         logging.error(f"Failed to save credit hashes to {path}: {e}")
 
+# (path, mtime_ns, size) -> phash hex string (or None if unreadable).
+# The key changes whenever the file is modified, so entries never go stale.
+_PHASH_CACHE = {}
+
 def compute_phash(image_path: Path):
     """Computes an image's perceptual hash as a hex string, or None if it
-    can't be opened/read."""
+    can't be opened/read. Results are cached per (path, mtime, size), so
+    reloading a chapter page doesn't re-decode every image."""
+    try:
+        stat = image_path.stat()
+    except OSError:
+        return None
+
+    key = (str(image_path), stat.st_mtime_ns, stat.st_size)
+    if key in _PHASH_CACHE:
+        return _PHASH_CACHE[key]
+
     try:
         with Image.open(image_path) as img:
-            return str(imagehash.phash(img))
+            result = str(imagehash.phash(img))
     except Exception as e:
         logging.warning(f"Could not compute perceptual hash for {image_path}: {e}")
-        return None
+        result = None
+
+    _PHASH_CACHE[key] = result
+    return result
 
 def _stack_hashes(hash_hex_list: list):
     """Converts hex-string phashes into one 2D boolean numpy array (one row
@@ -600,6 +649,81 @@ def find_redundant_clusters(hash_list: list, threshold: int):
         groups.setdefault(find(i), []).append(i)
 
     return list(groups.values()), dist_matrix
+
+
+# ---------------------------------------------------------------------------
+# Thumbnails: the Web UI galleries never need full-size images. Thumbnails
+# are generated on demand, cached on disk (keyed by path + mtime + size, so
+# an edited/cropped file automatically gets a fresh one), and served by the
+# /thumb/ route in web_ui.py.
+# ---------------------------------------------------------------------------
+
+THUMB_CACHE_DIR = Path(tempfile.gettempdir()) / "copyscan_thumbs"
+THUMB_QUALITY = 80
+
+def parse_thumb_px(thumb_size: str, default: int = 220) -> int:
+    """Extracts the pixel value from config's thumb_size ('220px' -> 220).
+    Falls back to `default` for any other unit (%, rem, ...)."""
+    match = re.match(r'^\s*(\d+)\s*px\s*$', str(thumb_size))
+    return int(match.group(1)) if match else default
+
+def get_image_size(image_path: Path):
+    """Returns (width, height) by reading the file header only (no full
+    decode), or None if the file can't be opened."""
+    try:
+        with Image.open(image_path) as img:
+            return img.size
+    except Exception:
+        return None
+
+def _thumb_cache_path(image_path: Path, max_w: int, max_h: int) -> Path:
+    stat = image_path.stat()
+    key = f"{image_path.resolve()}|{stat.st_mtime_ns}|{stat.st_size}|{max_w}x{max_h}"
+    digest = hashlib.sha1(key.encode('utf-8')).hexdigest()
+    return THUMB_CACHE_DIR / f"{digest}.jpg"
+
+def get_or_create_thumbnail(image_path: Path, max_w: int, max_h: int):
+    """Returns the path of a cached JPEG thumbnail fitting in max_w x max_h,
+    creating it if needed. Returns None on failure (unsupported format,
+    unreadable file...) so the caller can fall back to the original."""
+    try:
+        thumb_path = _thumb_cache_path(image_path, max_w, max_h)
+        if thumb_path.exists():
+            return thumb_path
+
+        THUMB_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        with Image.open(image_path) as img:
+            width, height = img.size
+            scale = min(max_w / width, max_h / height, 1.0)
+            # JPEG only (no-op for other formats): the decoder downscales by
+            # 1/2, 1/4 or 1/8 while decoding, far cheaper than a full decode.
+            img.draft('RGB', (max(1, int(width * scale)), max(1, int(height * scale))))
+            thumb = img if img.mode == 'RGB' else img.convert('RGB')
+            thumb.thumbnail((max_w, max_h), Image.Resampling.LANCZOS)
+
+            # Write to a temp name then atomically swap in, so two concurrent
+            # requests never serve a half-written file.
+            tmp_path = thumb_path.with_name(f"{thumb_path.name}.{uuid.uuid4().hex[:8]}.tmp")
+            thumb.save(tmp_path, format="JPEG", quality=THUMB_QUALITY)
+        os.replace(tmp_path, thumb_path)
+        return thumb_path
+    except Exception as e:
+        logging.warning(f"Could not build thumbnail for {image_path}: {e}")
+        return None
+
+def purge_thumb_cache() -> int:
+    """Empties the thumbnail cache. Returns the number of files removed."""
+    if not THUMB_CACHE_DIR.exists():
+        return 0
+    count = 0
+    for f in THUMB_CACHE_DIR.iterdir():
+        if f.is_file():
+            try:
+                f.unlink()
+                count += 1
+            except OSError:
+                pass
+    return count
 
 
 # ---------------------------------------------------------------------------

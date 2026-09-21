@@ -6,12 +6,18 @@ split), the split studio, and the trash browser. All destructive actions
 (delete, merge, split, banner crop) route through utils.send_to_trash()
 instead of touching files directly, so nothing is unrecoverable until the
 trash is purged.
+
+Galleries display cached thumbnails (/thumb/) rather than full-size images,
+and the perceptual-hash work behind credit/banner detection is cached and
+warmed in parallel, so reloading a chapter page stays fast.
 """
 
+import os
 import threading
 import base64
 import logging
 import re
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from flask import Flask, render_template, request, jsonify, send_file
 from werkzeug.serving import make_server, BaseWSGIServer
@@ -21,9 +27,11 @@ from utils import (
     load_credit_hashes, save_credit_hashes, compute_phash, is_known_credit_hash,
     find_known_credit_match,
     load_credit_banners, save_credit_banners, suggest_banner_cut, crop_remove_banner,
+    get_banner_candidates,
     natural_sort_key as get_natural_key, DEFAULT_KEYBOARD_SHORTCUTS,
     send_to_trash, load_trash_index, restore_from_trash, purge_trash, TRASH_REASON_LABELS,
-    setup_pin_protection
+    setup_pin_protection,
+    get_or_create_thumbnail, get_image_size, parse_thumb_px, purge_thumb_cache
 )
 
 BaseWSGIServer.allow_reuse_address = False
@@ -53,6 +61,12 @@ def start_web_ui(images_list, host, port, thumb_size, supported_extensions, mask
     app = Flask(__name__, template_folder=str(TEMPLATES_DIR))
     completion_event = threading.Event()
     shortcuts = shortcuts or DEFAULT_KEYBOARD_SHORTCUTS
+
+    # Thumbnails are generated at 2x the display size (hi-DPI screens) and
+    # bounded to 2x the CSS max-height (400px) of a card image.
+    thumb_max_w = parse_thumb_px(thumb_size) * 2
+    thumb_max_h = 800
+    purge_thumb_cache()
 
     # PIN gate for network-access mode: only ever triggers for clients
     # connecting from outside this machine (see setup_pin_protection).
@@ -91,6 +105,21 @@ def start_web_ui(images_list, host, port, thumb_size, supported_extensions, mask
         return suggest_banner_cut(
             file_path, position, known_banners.get(position, []), credit_banner_threshold
         )
+
+    def warm_caches(jobs):
+        """Runs (function, args) jobs in a small thread pool so the phash /
+        banner-candidate caches in utils get filled in parallel (PIL releases
+        the GIL while decoding and resizing). Purely an optimization: any
+        failure is logged and ignored, never raised into a request. Capped
+        at 4 workers because huge webtoon strips are memory-hungry."""
+        if not jobs:
+            return
+        try:
+            with ThreadPoolExecutor(max_workers=min(4, os.cpu_count() or 1)) as pool:
+                for func, job_args in jobs:
+                    pool.submit(func, *job_args)
+        except Exception as e:
+            logging.warning(f"Cache warm-up failed (ignored): {e}")
 
     # Only the leaf folders are stored: each folder's first image is
     # recomputed on demand in index(), so it always reflects the current
@@ -162,25 +191,30 @@ def start_web_ui(images_list, host, port, thumb_size, supported_extensions, mask
     @app.route('/')
     def index():
         """Main gallery: one card per Leaf folder, showing its current first image."""
-        main_images_data = []
-        for leaf_dir in leaf_dirs:
-            current_first = get_current_first_image(leaf_dir)
-            if not current_first:
-                # Folder became empty after a delete made in the editor tab.
-                continue
+        # Resolve every folder's current first page once (skipping folders
+        # emptied by a delete made in the editor tab), then hash them in
+        # parallel so the loop below only reads cached values.
+        leaf_firsts = [(leaf_dir, get_current_first_image(leaf_dir)) for leaf_dir in leaf_dirs]
+        leaf_firsts = [(leaf_dir, first) for leaf_dir, first in leaf_firsts if first]
+        warm_caches([(compute_phash, (first,)) for _, first in leaf_firsts])
 
+        main_images_data = []
+        for leaf_dir, current_first in leaf_firsts:
             b64 = base64.urlsafe_b64encode(str(current_first).encode('utf-8')).decode('utf-8')
             path_map[b64] = current_first
 
             serie_dir = leaf_dir.parent
             site_dir = serie_dir.parent if serie_dir else None
+            size = get_image_size(current_first)
 
             main_images_data.append({
                 'b64': b64,
                 'chapter': leaf_dir.name,
                 'serie': serie_dir.name if serie_dir else "Unknown",
                 'site': site_dir.name if site_dir else "Unknown",
-                'is_credit_match': check_credit_match(current_first) is not None
+                'is_credit_match': check_credit_match(current_first) is not None,
+                'w': size[0] if size else None,
+                'h': size[1] if size else None,
             })
 
         trash_count = len(load_trash_index(trash_dir))
@@ -189,7 +223,7 @@ def start_web_ui(images_list, host, port, thumb_size, supported_extensions, mask
 
     @app.route('/image/<b64_path>')
     def serve_image(b64_path):
-        """Serves an image by its base64-encoded path (main gallery, editor, or a pending merge result)."""
+        """Serves an image by its base64-encoded path (full size: used by the split studio)."""
         real_path = path_map.get(b64_path)
         if not real_path and b64_path in PENDING_MERGES:
             real_path = PENDING_MERGES[b64_path]['merged_path']
@@ -197,6 +231,21 @@ def start_web_ui(images_list, host, port, thumb_size, supported_extensions, mask
         if real_path and real_path.exists():
             return send_file(str(real_path))
         return "Image not found", 404
+
+    @app.route('/thumb/<b64_path>')
+    def serve_thumb(b64_path):
+        """Serves a cached thumbnail of an image (or of a pending merge
+        result). Falls back to the original file if no thumbnail can be
+        built (e.g. a format Pillow can't read)."""
+        real_path = path_map.get(b64_path)
+        if not real_path and b64_path in PENDING_MERGES:
+            real_path = PENDING_MERGES[b64_path]['merged_path']
+
+        if not real_path or not real_path.exists():
+            return "Image not found", 404
+
+        thumb_path = get_or_create_thumbnail(real_path, thumb_max_w, thumb_max_h)
+        return send_file(str(thumb_path or real_path))
 
     @app.route('/validate', methods=['POST'])
     def validate():
@@ -324,7 +373,18 @@ def start_web_ui(images_list, host, port, thumb_size, supported_extensions, mask
                 ], key=get_natural_key)
             except Exception as e:
                 return f"Error accessing leaf folder: {e}", 500
-                
+
+            # Cold-cache speed-up: hash the pages in parallel, banner sweeps
+            # first (they are the heaviest jobs). Results land in utils'
+            # caches; the loop below then only reads them.
+            warm_jobs = []
+            if files and known_banners.get('top'):
+                warm_jobs.append((get_banner_candidates, (files[0], 'top')))
+            if files and known_banners.get('bottom'):
+                warm_jobs.append((get_banner_candidates, (files[-1], 'bottom')))
+            warm_jobs.extend((compute_phash, (f,)) for f in files)
+            warm_caches(warm_jobs)
+
             images_data = []
             last_idx = len(files) - 1
             for idx, f in enumerate(files):
@@ -344,6 +404,7 @@ def start_web_ui(images_list, host, port, thumb_size, supported_extensions, mask
                         banner_suggestion = {'position': 'bottom', 'cut_pct': bottom_cut, 'hash': bottom_hash}
 
                 credit_match_hash = check_credit_match(f)
+                size = get_image_size(f)
 
                 images_data.append({
                     'b64': f_b64,
@@ -353,7 +414,9 @@ def start_web_ui(images_list, host, port, thumb_size, supported_extensions, mask
                     'site': site_dir.name if site_dir else "Unknown",
                     'is_credit_match': credit_match_hash is not None,
                     'credit_hash': credit_match_hash,
-                    'banner_suggestion': banner_suggestion
+                    'banner_suggestion': banner_suggestion,
+                    'w': size[0] if size else None,
+                    'h': size[1] if size else None,
                 })
                 
             return render_template(
@@ -375,12 +438,15 @@ def start_web_ui(images_list, host, port, thumb_size, supported_extensions, mask
             # Phase 2: Validation of generated merges
             images_data = []
             for b64, info in folder_merges.items():
+                size = get_image_size(info['merged_path'])
                 images_data.append({
                     'b64': b64,
                     'display_name': info['filename'],
                     'chapter': leaf_dir.name,
                     'serie': serie_dir.name if serie_dir else "Unknown",
-                    'site': site_dir.name if site_dir else "Unknown"
+                    'site': site_dir.name if site_dir else "Unknown",
+                    'w': size[0] if size else None,
+                    'h': size[1] if size else None,
                 })
             return render_template(
                 'editor.html',
