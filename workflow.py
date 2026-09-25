@@ -21,7 +21,7 @@ from concurrent.futures import ThreadPoolExecutor
 from utils import (
     console, get_leaf_dirs, get_parent2_dirs, merge_directories, resolve_conflict,
     find_free_port, resolve_keyboard_shortcuts, resolve_web_ui_host, get_local_ip,
-    resolve_web_ui_pin, purge_trash
+    resolve_web_ui_pin, purge_trash, resolve_preload_settings
 )
 from web_ui import start_web_ui
 
@@ -161,11 +161,13 @@ def step_2_web_ui(config):
     shortcuts = resolve_keyboard_shortcuts(config)
     mobile_mini_mode = bool(config.get('mobile_mini_mode', False))
     web_pin = resolve_web_ui_pin(config)
+    preload_chapters_ahead, preload_workers = resolve_preload_settings(config)
     server_thread, completion_event = start_web_ui(
         first_images, host, port, config['thumb_size'], exts, mask_popups,
         credit_hashes_path, credit_hash_threshold,
         credit_banners_path, credit_banner_threshold,
-        shortcuts, trash_dir, mobile_mini_mode, web_pin
+        shortcuts, trash_dir, mobile_mini_mode, web_pin,
+        preload_chapters_ahead, preload_workers
     )
     
     url = f"http://127.0.0.1:{port}"
@@ -399,13 +401,13 @@ def step_7_compress(config):
         """Preferred compressor: 7-Zip via subprocess."""
         # Force 7z to 2 threads so one archive doesn't hog all CPU cores.
         cmd_add = [executable, "a", "-tzip", "-r", "-mmt=2", str(archive_path), str(leaf) + os.sep]
-        res_add = subprocess.run(cmd_add, capture_output=True)
+        res_add = subprocess.run(cmd_add, capture_output=True, stdin=subprocess.DEVNULL)
         if res_add.returncode != 0:
             logging.error(f"7z compress stderr: {res_add.stderr.decode(errors='replace')}")
             raise RuntimeError(f"Compression failed: {leaf}")
 
         cmd_test = [executable, "t", str(archive_path)]
-        res_test = subprocess.run(cmd_test, capture_output=True)
+        res_test = subprocess.run(cmd_test, capture_output=True, stdin=subprocess.DEVNULL)
         if res_test.returncode != 0:
             logging.error(f"7z test stderr: {res_test.stderr.decode(errors='replace')}")
             raise RuntimeError(f"Test failed for archive: {archive_path}")

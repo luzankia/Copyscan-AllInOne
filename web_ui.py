@@ -34,20 +34,24 @@ from utils import (
     get_or_create_thumbnail, get_image_size, parse_thumb_px, purge_thumb_cache
 )
 
+
 BaseWSGIServer.allow_reuse_address = False
 
 class ServerThread(threading.Thread):
-    def __init__(self, app, host, port):
+    def __init__(self, app, host, port, preload_executor=None):
         threading.Thread.__init__(self)
         self.server = make_server(host, port, app, threaded=True)
         self.ctx = app.app_context()
         self.ctx.push()
+        self.preload_executor = preload_executor
 
     def run(self):
         self.server.serve_forever()
 
     def shutdown(self):
         self.server.shutdown()
+        if self.preload_executor is not None:
+            self.preload_executor.shutdown(wait=True, cancel_futures=True)
 
 
 TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
@@ -55,7 +59,8 @@ TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
 def start_web_ui(images_list, host, port, thumb_size, supported_extensions, mask_popups=False,
                   credit_hashes_path=None, credit_hash_threshold=8,
                   credit_banners_path=None, credit_banner_threshold=10,
-                  shortcuts=None, trash_dir=None, mobile_mini_mode=False, web_pin=None):
+                  shortcuts=None, trash_dir=None, mobile_mini_mode=False, web_pin=None,
+                  preload_chapters_ahead=1, preload_workers=1):
 
     """Starts the Flask server for manual sorting, merging, and image splitting."""
     app = Flask(__name__, template_folder=str(TEMPLATES_DIR))
@@ -67,6 +72,13 @@ def start_web_ui(images_list, host, port, thumb_size, supported_extensions, mask
     thumb_max_w = parse_thumb_px(thumb_size) * 2
     thumb_max_h = 800
     purge_thumb_cache()
+
+    preload_executor = (
+        ThreadPoolExecutor(max_workers=preload_workers, thread_name_prefix="copyscan-preload")
+        if preload_chapters_ahead > 0 else None
+    )
+    preloaded_leaf_dirs = set()
+    preload_lock = threading.Lock()
 
     # PIN gate for network-access mode: only ever triggers for clients
     # connecting from outside this machine (see setup_pin_protection).
@@ -105,6 +117,45 @@ def start_web_ui(images_list, host, port, thumb_size, supported_extensions, mask
         return suggest_banner_cut(
             file_path, position, known_banners.get(position, []), credit_banner_threshold
         )
+
+    def preload_leaf(leaf_dir):
+        """Warms the phash / banner-candidate caches for every page of
+        leaf_dir. Runs in the background preload pool -- best-effort only:
+        any error here is swallowed (logged), since this is never something
+        a request is waiting on."""
+        try:
+            files = sorted([
+                f for f in leaf_dir.iterdir()
+                if f.is_file() and f.suffix.lower() in supported_extensions and not f.name.startswith("fus-")
+            ], key=get_natural_key)
+        except Exception as e:
+            logging.warning(f"Background preload: could not list {leaf_dir}: {e}")
+            return
+
+        for f in files:
+            compute_phash(f)
+        if files and known_banners.get('top'):
+            get_banner_candidates(files[0], 'top')
+        if files and known_banners.get('bottom'):
+            get_banner_candidates(files[-1], 'bottom')
+
+    def queue_preload(leaf_dir):
+        if leaf_dir is None or preload_executor is None:
+            return
+        with preload_lock:
+            if leaf_dir in preloaded_leaf_dirs:
+                return
+            preloaded_leaf_dirs.add(leaf_dir)
+        preload_executor.submit(preload_leaf, leaf_dir)
+
+    def queue_preload_ahead(current_idx):
+        if current_idx == -1:
+            return
+        for offset in range(1, preload_chapters_ahead + 1):
+            idx = current_idx + offset
+            if idx >= len(leaf_dirs):
+                break
+            queue_preload(leaf_dirs[idx])
 
     def warm_caches(jobs):
         """Runs (function, args) jobs in a small thread pool so the phash /
@@ -359,6 +410,8 @@ def start_web_ui(images_list, host, port, thumb_size, supported_extensions, mask
                 next_b64 = base64.urlsafe_b64encode(str(next_first).encode('utf-8')).decode('utf-8')
                 path_map[next_b64] = next_first
                 next_url = f"/edit/{next_b64}"
+
+        queue_preload_ahead(current_idx)
 
         # Progress through the chapter list, drawn as the thin top bar.
         total_chapters = len(leaf_dirs)
@@ -826,7 +879,7 @@ def start_web_ui(images_list, host, port, thumb_size, supported_extensions, mask
     # --- SERVER LAUNCH ---
     # workflow.py opens the browser, waits for completion_event, then stops
     # this thread.
-    server_thread = ServerThread(app, host, port)
+    server_thread = ServerThread(app, host, port, preload_executor)
     server_thread.start()
     
     return server_thread, completion_event

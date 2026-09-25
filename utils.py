@@ -278,6 +278,28 @@ def resolve_keyboard_shortcuts(config: dict) -> dict:
 
     return shortcuts
 
+def resolve_preload_settings(config: dict):
+    """Resolves the optional background chapter-preload settings from
+    config.yaml."""
+    chapters_ahead = config.get('preload_chapters_ahead', 1)
+    workers = config.get('preload_workers', 1)
+
+    if isinstance(chapters_ahead, bool) or not isinstance(chapters_ahead, int) or chapters_ahead < 0:
+        console.print(
+            "[yellow]Warning: 'preload_chapters_ahead' must be a non-negative integer in "
+            "config.yaml; defaulting to 1.[/yellow]"
+        )
+        chapters_ahead = 1
+
+    if isinstance(workers, bool) or not isinstance(workers, int) or workers < 1:
+        console.print(
+            "[yellow]Warning: 'preload_workers' must be a positive integer in config.yaml; "
+            "defaulting to 1.[/yellow]"
+        )
+        workers = 1
+
+    return chapters_ahead, workers
+
 def natural_sort_key(path: Path):
     """Splits a filename on digit runs for natural ordering
     (e.g. 'Ch.9' < 'Ch.20' < 'Ch.110')."""
@@ -438,7 +460,7 @@ def suggest_banner_cut(image_path: Path, position: str, known_hashes: list, thre
     None if nothing matches within threshold."""
     if not known_hashes:
         return None
-    known_matrix = _stack_hashes(known_hashes)
+    known_matrix, index_map = _stack_hashes(known_hashes)
     if known_matrix is None:
         return None
 
@@ -453,13 +475,13 @@ def suggest_banner_cut(image_path: Path, position: str, known_hashes: list, thre
     distances = np.count_nonzero(
         candidate_matrix[:, None, :] != known_matrix[None, :, :], axis=2
     )
-    cand_idx, hash_idx = (int(v) for v in np.unravel_index(int(distances.argmin()), distances.shape))
-    if distances[cand_idx, hash_idx] > threshold:
+    cand_idx, row_idx = (int(v) for v in np.unravel_index(int(distances.argmin()), distances.shape))
+    if distances[cand_idx, row_idx] > threshold:
         return None
 
     banner_height_pct = pcts[cand_idx]
     cut_y_pct = banner_height_pct if position == 'top' else (100 - banner_height_pct)
-    return cut_y_pct, known_hashes[hash_idx]
+    return cut_y_pct, known_hashes[index_map[row_idx]]
 
 def compute_banner_slice_hash(image_path: Path, cut_percent: float, side: str):
     """Computes the perceptual hash of just the top/bottom slice at
@@ -562,17 +584,30 @@ def compute_phash(image_path: Path):
     _PHASH_CACHE[key] = result
     return result
 
+_STACK_CACHE = {}
+
 def _stack_hashes(hash_hex_list: list):
     """Converts hex-string phashes into one 2D boolean numpy array (one row
-    per hash), for vectorized Hamming-distance comparisons. Returns None if
-    the list is empty or has no valid hashes."""
-    rows = []
-    for hex_str in hash_hex_list:
+    per valid hash), for vectorized Hamming-distance comparisons."""
+    if not hash_hex_list:
+        return None, []
+
+    content_key = tuple(hash_hex_list)
+    cached = _STACK_CACHE.get(id(hash_hex_list))
+    if cached is not None and cached[0] == content_key:
+        return cached[1], cached[2]
+
+    rows, index_map = [], []
+    for i, hex_str in enumerate(hash_hex_list):
         try:
             rows.append(imagehash.hex_to_hash(hex_str).hash.flatten())
+            index_map.append(i)
         except Exception:
-            continue
-    return np.array(rows) if rows else None
+            logging.warning(f"Skipping unparsable hash in database: {hex_str!r}")
+
+    matrix = np.array(rows) if rows else None
+    _STACK_CACHE[id(hash_hex_list)] = (content_key, matrix, index_map)
+    return matrix, index_map
 
 def is_known_credit_hash(image_hash_hex: str, known_hashes: list, threshold: int) -> bool:
     """Returns whether image_hash_hex is within `threshold` Hamming distance
@@ -583,7 +618,7 @@ def is_known_credit_hash(image_hash_hex: str, known_hashes: list, threshold: int
         candidate = imagehash.hex_to_hash(image_hash_hex).hash.flatten()
     except Exception:
         return False
-    matrix = _stack_hashes(known_hashes)
+    matrix, _ = _stack_hashes(known_hashes)
     if matrix is None:
         return False
     distances = np.count_nonzero(matrix != candidate, axis=1)
@@ -599,34 +634,36 @@ def find_known_credit_match(image_hash_hex: str, known_hashes: list, threshold: 
         candidate = imagehash.hex_to_hash(image_hash_hex).hash.flatten()
     except Exception:
         return None
-    matrix = _stack_hashes(known_hashes)
+    matrix, index_map = _stack_hashes(known_hashes)
     if matrix is None:
         return None
     distances = np.count_nonzero(matrix != candidate, axis=1)
-    best_idx = int(distances.argmin())
-    if distances[best_idx] <= threshold:
-        return known_hashes[best_idx]
+    best_row = int(distances.argmin())
+    if distances[best_row] <= threshold:
+        return known_hashes[index_map[best_row]]
     return None
 
 def find_redundant_clusters(hash_list: list, threshold: int):
     """Single-linkage clusters hash_list's indices: two hashes share a
     cluster if a chain of within-threshold neighbors connects them. O(n^2)
     in time and memory -- fine for hundreds of hashes, but costly if the
-    database grows into the thousands. Returns (clusters, dist_matrix)."""
+    database grows into the thousands. Returns (clusters, dist_matrix);
+    dist_matrix only covers the parseable hashes (see _stack_hashes)."""
     n = len(hash_list)
     if n == 0:
         return [], None
 
-    matrix = _stack_hashes(hash_list)
+    matrix, index_map = _stack_hashes(hash_list)
     if matrix is None:
         return [[i] for i in range(n)], None
 
+    valid_n = len(index_map)
     # Row-by-row (not a full NxN broadcast) to keep memory usage linear in n.
-    dist_matrix = np.zeros((n, n), dtype=int)
-    for i in range(n):
+    dist_matrix = np.zeros((valid_n, valid_n), dtype=int)
+    for i in range(valid_n):
         dist_matrix[i] = np.count_nonzero(matrix != matrix[i], axis=1)
 
-    parent = list(range(n))
+    parent = list(range(valid_n))
 
     def find(x):
         while parent[x] != x:
@@ -639,16 +676,22 @@ def find_redundant_clusters(hash_list: list, threshold: int):
         if ra != rb:
             parent[ra] = rb
 
-    for i in range(n):
-        for j in range(i + 1, n):
+    for i in range(valid_n):
+        for j in range(i + 1, valid_n):
             if dist_matrix[i, j] <= threshold:
                 union(i, j)
 
     groups = {}
-    for i in range(n):
-        groups.setdefault(find(i), []).append(i)
+    for i in range(valid_n):
+        groups.setdefault(find(i), []).append(index_map[i])
 
-    return list(groups.values()), dist_matrix
+    clusters = list(groups.values())
+    # An unparsable hash is still shown to the user (as its own singleton
+    # "cluster") instead of silently vanishing from the review table.
+    valid_set = set(index_map)
+    clusters.extend([i] for i in range(n) if i not in valid_set)
+
+    return clusters, dist_matrix
 
 
 # ---------------------------------------------------------------------------

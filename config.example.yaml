@@ -33,6 +33,10 @@ web_ui_pin: "1234"  # PIN asked once per session from clients connecting via a n
 mobile_mini_mode: false
 thumb_size: "220px"
 
+# Step 2 Web UI: background chapter preloading.
+preload_chapters_ahead: 1  # How many upcoming chapters to warm in the background. 0 disables preloading entirely.
+preload_workers: 1  # Background thread pool size dedicated to preloading.
+
 # Workflow Steps Activation
 steps_active:
   step_1: true  # Integrity Check (ImageMagick)

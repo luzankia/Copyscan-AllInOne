@@ -19,6 +19,7 @@
   * **Built-in trash**: every destructive Web UI action (delete, fusion, split, banner crop) moves the affected files to a trash folder instead of deleting them outright. A trash browser page lets you review and restore anything until the next run purges it.
   * **Mobile / touch friendly**: the UI automatically switches to a compact layout on portrait (taller-than-wide) screens, or permanently via `mobile_mini_mode` in `config.yaml`. An **⏭ Auto-next** toggle replaces the Shift key on touch devices (makes Delete / Remember Credit / Validate always jump to the next chapter afterward).
   * **Optional popup masking**: confirmation dialogs and alerts in the Web UI can be silently auto-accepted via `mask_security_popups` in `config.yaml`, for a faster, uninterrupted review pass.
+  * **Fast gallery loading**: chapters display cached, on-the-fly-generated thumbnails instead of full-size images, and the perceptual-hash work behind credit-page/banner detection is cached per file. Combined with **background chapter preloading** (`preload_chapters_ahead` / `preload_workers` in `config.yaml`), the next chapter(s) can already be warmed up while you're still reviewing the current one, so navigating forward stays fast.
   * Responsive CSS tooltips and dynamic thumbnails.
 * **External tools integration**: [ImageMagick](https://imagemagick.org/) (for integrity checks) and [7-Zip](https://www.7-zip.org/) (for compression).
   * If ImageMagick is missing, the CLI offers to skip the integrity check step for the current run instead of just stopping the process.
@@ -192,7 +193,7 @@ python local.py
 
 ## Advanced Configuration
 
-`config.example.yaml` is the template — copy it to `config.yaml` and adjust every path. All keys are required; the script validates their presence and type at startup.
+`config.example.yaml` is the template — copy it to `config.yaml` and adjust every path. All keys are required unless noted otherwise; the script validates their presence and type at startup.
 
 | Key | Purpose |
 |---|---|
@@ -209,6 +210,8 @@ python local.py
 | `web_ui_pin` | PIN asked once per session from clients connecting via a non-`127.0.0.1` address. **Required** when `web_ui_network_access` is `true` (the run refuses to start without it); ignored otherwise. |
 | `mobile_mini_mode` | `true` forces the compact mobile layout everywhere in the Web UI (it also activates automatically on portrait screens). |
 | `thumb_size` | Thumbnail size used across the Web UI. |
+| *(optional)* `preload_chapters_ahead` | How many upcoming chapters the Chapter Editor warms in the background while you review the current one. Defaults to `1` (only the next chapter) if omitted; `0` disables background preloading entirely. |
+| *(optional)* `preload_workers` | Background thread pool size dedicated to preloading. Defaults to `1` if omitted. Each additional worker decodes and hashes full-size images concurrently with everything else running on the machine at that moment (your own browsing, Step 1's ImageMagick checks if still running, other programs), so raising it trades more concurrent CPU/disk I/O load for a faster catch-up when `preload_chapters_ahead` is high — keep it well below your CPU's core count. An invalid value (negative, non-integer) falls back to the default with a console warning rather than failing the run. |
 | `steps_active` | Per-step on/off switches (`step_1` … `step_9`). |
 | `mask_security_popups` | Auto-accept every confirmation popup in the Web UI. |
 | `keyboard_shortcuts` | Rebindable Web UI shortcuts (defaults: `ArrowLeft`/`ArrowRight`, `Delete`, `C`, `M`, `V`, `X`). |
@@ -227,6 +230,7 @@ python local.py
 * **Run refuses to start with "web_ui_pin is missing"**: network access was enabled without a PIN — set `web_ui_pin` in `config.yaml` (asked of remote devices only, never from `127.0.0.1`), or set `web_ui_network_access: false`. Remote clients entering a wrong PIN get a 1.5 s delay per attempt, and every failed attempt is written to the log.
 * **Deleted something by mistake**: open the 🗑 Trash page from the main gallery and restore it — entries stay recoverable until the next run's Step 2 purges the trash.
 * **Hash Maintenance tool shows unexpected/missing hashes**: this is almost always a path mismatch — the tool defaults to the `config.yaml` sitting next to `hash_maintenance.py`. Check the console output at startup: it prints the exact config file and both database paths it resolved, plus how many hashes were loaded from each.
+* **Chapter Editor still feels slow to load**: the first visit to a chapter is always the most expensive one (nothing is cached yet) — reloading it, or coming back later, should be close to instant. If even a first visit feels slow and you have `preload_chapters_ahead` set high with several `preload_workers`, try lowering both: on a slower disk, many concurrent background jobs can end up competing with the chapter you're actively trying to open.
 * **Logging**: Every operation is logged in the path specified by `log_path` in `config.yaml` (UTF-8 encoded), unless `log_enabled` is set to `false`. The destination folder is created automatically if missing; use `--log-path` to override the location for a single run.
 * **Keyboard shortcut not working as expected**: an unknown entry name, an empty value, or two actions bound to the same key under `keyboard_shortcuts` in `config.yaml` all print a `Warning:` line to the console at startup (the affected binding falls back to its default) — check there first.
 
